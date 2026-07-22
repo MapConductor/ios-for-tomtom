@@ -1,0 +1,21 @@
+build/
+AGENTS.md
+CLAUDE.md
+Secrets.*
+.*
+!.gitignore
+!.gitkeep
+Package.resolved
+Packages/
+.build
+
+# TomTom SDK xcframeworks (fetch via scripts/fetch-tomtom-sdk.sh)
+Frameworks/
+
+# Sample app (xcodegen-generated project + build output)
+Sample/*.xcodeproj
+Sample/build/
+Sample/Info.plist
+.build/
+DerivedData/
+Sample/build-device/
