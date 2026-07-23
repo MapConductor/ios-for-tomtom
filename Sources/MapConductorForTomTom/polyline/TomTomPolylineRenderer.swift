@@ -35,6 +35,8 @@ final class TomTomPolylineRenderer: AbstractPolylineOverlayRenderer<TomTomActual
         var options = LineOptions(coordinates: coordinates(state.points, geodesic: state.geodesic))
         options.lineColor = state.strokeColor
         options.lineWidth = state.strokeWidth
+        // Line は既定で赤い枠線（outline）を描くため無効化（他プロバイダに合わせる）。
+        options.outlineAppearance.outlineWidth = 0.0
         let line = try? map.addLine(options: options)
         line?.tag = state.id
         return line
