@@ -3,10 +3,9 @@
 TomTom Orbis Maps provider for the MapConductor unified mapping API, built on
 [`TomTomSDKMapDisplay`](https://developer.tomtom.com/maps-sdk-ios/documentation).
 
-> **Scope (current): core + markers only.**
-> `TomTomMapView` / view state / controller / map design / **markers** (add/update/remove, tap,
-> **custom drag**, drop/bounce animation) are implemented. Polyline / Polygon / Circle / GroundImage /
-> RasterLayer are not yet implemented.
+`TomTomMapView` supports the same MapConductor content types as the Android
+`android-for-tomtom` provider: Marker, Polyline, Polygon, Circle, GroundImage, RasterLayer and
+InfoBubble.
 
 This mirrors the Android `android-for-tomtom` module feature-for-feature:
 
@@ -21,6 +20,11 @@ This mirrors the Android `android-for-tomtom` module feature-for-feature:
   frame would freeze the app, same lesson as Android).
 - **In-place updates**: TomTom's `Marker` exposes mutable `coordinate` / `image` / `isVisible`, so
   position/icon/visibility updates mutate the existing native marker.
+- **Ground images**: rendered as TomTom textured polygons. Bounds changes recreate the native
+  polygon because TomTom does not reliably invalidate changed polygon coordinates.
+- **Raster layers**: TomTom's base style and MapConductor raster sources are composed into a local
+  custom style. This also enables LocalTileServer-backed Heatmap and GeoJSON layers. Retina tile
+  requests such as `@2x.png` are rendered at their requested pixel density.
 
 ## Setup
 
@@ -71,6 +75,9 @@ TomTomMapView(state: state) {
 | `ZoomAltitudeConverter.swift` | Zoom↔altitude with latitude-aware TomTom calibration |
 | `marker/TomTomMarkerRenderer.swift` | Native marker rendering (in-place mutation) |
 | `marker/TomTomMarkerController.swift` | Marker sync + drag hit-test (`find`) |
+| `polyline/`, `polygon/`, `circle/` | Native vector overlay renderers and controllers |
+| `groundimage/` | Native textured-polygon GroundImage renderer and controller |
+| `raster/` | Raster layer synchronization and TomTom custom-style composition |
 
 ## License
 

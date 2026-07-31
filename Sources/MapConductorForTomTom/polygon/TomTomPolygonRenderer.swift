@@ -46,13 +46,15 @@ final class TomTomPolygonRenderer: AbstractPolygonOverlayRenderer<TomTomActualPo
         let finger = current.fingerPrint
         let prevFinger = prev.fingerPrint
 
-        // Outline width is immutable on `Polygon`; re-create when it changes.
-        if finger.strokeWidth != prevFinger.strokeWidth {
+        // Outline width and geometry are effectively immutable on TomTom's
+        // `Polygon`: setting `.coordinates` in place does not re-render, so a
+        // points/geodesic change (e.g. dragging a vertex) must remove and
+        // re-create the polygon — same as the stroke-width case.
+        if finger.strokeWidth != prevFinger.strokeWidth
+            || finger.points != prevFinger.points
+            || finger.geodesic != prevFinger.geodesic {
             map?.remove(annotation: polygon)
             return await createPolygon(state: current.state)
-        }
-        if finger.points != prevFinger.points || finger.geodesic != prevFinger.geodesic {
-            polygon.coordinates = ring(current.state.points, geodesic: current.state.geodesic)
         }
         if finger.fillColor != prevFinger.fillColor {
             polygon.fillColor = current.state.fillColor

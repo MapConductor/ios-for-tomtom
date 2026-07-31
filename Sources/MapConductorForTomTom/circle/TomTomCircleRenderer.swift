@@ -3,66 +3,62 @@ import Foundation
 import MapConductorCore
 import TomTomSDKMapDisplay
 
-/// Renders MapConductor circles as a two-layer composite (mirrors the Mapbox renderer's
-/// fill-layer + line-layer approach): a native TomTom `Circle` for the fill, plus a `Line`
-/// ring for the outline. TomTom's iOS `Circle` has no outline, so the stroke is drawn as a
-/// separate polyline ring with a constant pixel width.
+/// Renders MapConductor circles as a single native TomTom `Polygon` (a 64-segment ring),
+/// mirroring `TomTomPolygonRenderer` and matching how the Google provider draws circles
+/// (a 64-segment filled polygon).
 ///
-/// The native `Circle`/`Line` are largely immutable, so any visual change re-creates them.
+/// This intentionally replaces the earlier fill-`Circle` + stroke-`Line` composite, which had
+/// two problems:
+///   1. `Line` draws a default red outline; on a thin semi-transparent stroke that red bled into
+///      the blue line and the outline looked purple. `Polygon.outlineColor` is a true outline
+///      (same path the working polygon renderer uses), so the stroke renders in its real color.
+///   2. TomTom's `Circle`/`Line` have immutable geometry/appearance, so every drag frame
+///      re-created both native overlays — which flickers. `Polygon` exposes mutable
+///      `coordinates`/`fillColor`/`outlineColor`, so a drag mutates the ring in place with no
+///      add/remove and therefore no flicker. Only a stroke-width change (immutable) re-creates.
 @MainActor
 final class TomTomCircleRenderer: AbstractCircleOverlayRenderer<TomTomActualCircle> {
     weak var map: TomTomMap?
+
+    /// 円の描画（追加/更新/カメラ移動）が終わるたびに呼ばれる。
+    /// 円は毎フレーム作り直されて最前面に来るため、ここでポリラインを最前面へ戻す。
+    var onAfterRender: (() async -> Void)?
 
     init(map: TomTomMap?) {
         super.init()
         self.map = map
     }
 
-    /// 中心から半径 radiusMeters の円周を近似する閉じたリング（64分割）。
+    override func onPostProcess() async {
+        await onAfterRender?()
+    }
+
+    /// 中心から半径 radiusMeters の円周を近似する 64 分割のリング。
     private func ringPoints(_ state: CircleState) -> [CLLocationCoordinate2D] {
         let lat = state.center.latitude
         let lng = state.center.longitude
         let segments = 64
         let metersPerDegree = 111_320.0
         let latCorrection = state.geodesic ? cos(lat * .pi / 180.0) : 1.0
-        var ring: [CLLocationCoordinate2D] = (0 ..< segments).map { i in
+        return (0 ..< segments).map { i in
             let angle = 2.0 * .pi * Double(i) / Double(segments)
             let deltaLat = state.radiusMeters / metersPerDegree * cos(angle)
             let deltaLng = state.radiusMeters / (metersPerDegree * latCorrection) * sin(angle)
             return CLLocationCoordinate2D(latitude: lat + deltaLat, longitude: lng + deltaLng)
         }
-        if let first = ring.first { ring.append(first) }
-        return ring
-    }
-
-    private func makeFill(_ state: CircleState) -> TomTomSDKMapDisplay.Circle? {
-        guard let map else { return nil }
-        let options = CircleOptions(
-            coordinate: CLLocationCoordinate2D(latitude: state.center.latitude, longitude: state.center.longitude),
-            radius: state.radiusMeters,
-            fillColor: state.fillColor
-        )
-        let fill = try? map.addCircle(options: options)
-        fill?.tag = state.id
-        return fill
-    }
-
-    private func makeStroke(_ state: CircleState) -> TomTomSDKMapDisplay.Line? {
-        guard let map, state.strokeWidth > 0 else { return nil }
-        // 枠線レイヤー: polyline リング（クリックは塗り側で扱うため選択不可）。
-        var options = LineOptions(coordinates: ringPoints(state))
-        options.lineColor = state.strokeColor
-        options.lineWidth = state.strokeWidth
-        // Line は既定で赤い枠線（outline）を描くため、他プロバイダに合わせて無効化する。
-        // これが原因で細い半透明線が赤く見えていた。
-        options.outlineAppearance.outlineWidth = 0.0
-        let stroke = try? map.addLine(options: options)
-        stroke?.tag = "circle-stroke-\(state.id)"
-        return stroke
     }
 
     override func createCircle(state: CircleState) async -> TomTomActualCircle? {
-        TomTomCircleHandle(fill: makeFill(state), stroke: makeStroke(state))
+        guard let map else { return nil }
+        var options = PolygonOptions(coordinates: ringPoints(state))
+        options.fillColor = state.fillColor
+        options.outlineColor = state.strokeColor
+        options.outlineWidth = state.strokeWidth
+        options.isSelectable = state.clickable
+        let polygon = try? map.addPolygon(options: options)
+        // "circle-" 接頭辞でタップ時に円として振り分ける（TomTomMapView 参照）。
+        polygon?.tag = "circle-\(state.id)"
+        return polygon
     }
 
     override func updateCircleProperties(
@@ -74,32 +70,35 @@ final class TomTomCircleRenderer: AbstractCircleOverlayRenderer<TomTomActualCirc
         let prevFinger = prev.fingerPrint
         let state = current.state
 
-        // TomTom iOS の `Circle` は radius/center が immutable なので、幾何が変われば作り直すしかない。
-        let ringChanged = finger.center != prevFinger.center ||
+        // `Polygon.coordinates` は stored property でエンジンにブリッジされず、代入しても
+        // 再描画されない（＝エッジのドラッグに追従しない）。outlineWidth も options 側のみで
+        // immutable。したがって幾何 / 線幅が変わったら作り直す必要がある。
+        // 空フレームでちらつかないよう「新しい polygon を追加してから古いものを削除」する。
+        if finger.center != prevFinger.center ||
             finger.radiusMeters != prevFinger.radiusMeters ||
-            finger.geodesic != prevFinger.geodesic
-        let fillChanged = ringChanged || finger.fillColor != prevFinger.fillColor
-        let strokeChanged = ringChanged ||
-            finger.strokeColor != prevFinger.strokeColor ||
-            finger.strokeWidth != prevFinger.strokeWidth
+            finger.geodesic != prevFinger.geodesic ||
+            finger.strokeWidth != prevFinger.strokeWidth {
+            let replacement = await createCircle(state: state)
+            map?.remove(annotation: circle)
+            return replacement
+        }
 
-        guard fillChanged || strokeChanged else { return circle }
-
-        // ドラッグ中は毎フレーム更新されるため、
-        //  1) 新レイヤーを先に追加してから旧レイヤーを削除する（空フレームが無く、ちらつかない）。
-        //  2) 塗り→枠線 の順に追加して枠線を常に塗りの上に置く
-        //     （塗りを後から足すと枠線が半透明の塗りに隠れて「色が違う／枠が描かれない」ように見える）。
-        let oldFill = circle.fill
-        let oldStroke = circle.stroke
-        circle.fill = makeFill(state)
-        circle.stroke = makeStroke(state)
-        if let oldStroke { map?.remove(annotation: oldStroke) }
-        if let oldFill { map?.remove(annotation: oldFill) }
+        // fillColor / outlineColor は computed で即時反映されるため in-place 更新できる。
+        if finger.fillColor != prevFinger.fillColor {
+            circle.fillColor = state.fillColor
+        }
+        if finger.strokeColor != prevFinger.strokeColor {
+            circle.outlineColor = state.strokeColor
+        }
+        if finger.clickable != prevFinger.clickable {
+            circle.isSelectable = state.clickable
+        }
         return circle
     }
 
     override func removeCircle(entity: CircleEntity<TomTomActualCircle>) async {
-        if let fill = entity.circle?.fill { map?.remove(annotation: fill) }
-        if let stroke = entity.circle?.stroke { map?.remove(annotation: stroke) }
+        if let polygon = entity.circle {
+            map?.remove(annotation: polygon)
+        }
     }
 }

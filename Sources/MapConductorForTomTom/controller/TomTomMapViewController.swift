@@ -5,6 +5,7 @@ import TomTomSDKMapDisplay
 
 final class TomTomMapViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
+    let typedHolder: TomTomMapViewHolder
     let coroutine = CoroutineScope()
 
     private weak var mapView: MapView?
@@ -17,14 +18,12 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     private var mapLongClickListener: OnMapEventHandler?
     private var mapInitializedListener: OnMapInitializedHandler?
 
-    private let tomtomHolder: TomTomMapViewHolder
-
     init(mapView: MapView, map: TomTomMap) {
         self.mapView = mapView
         self.map = map
-        let holder = TomTomMapViewHolder(mapView: mapView, map: map)
-        self.tomtomHolder = holder
-        self.holder = AnyMapViewHolder(holder)
+        let typedHolder = TomTomMapViewHolder(mapView: mapView, map: map)
+        self.typedHolder = typedHolder
+        self.holder = AnyMapViewHolder(typedHolder)
     }
 
     func clearOverlays() async {

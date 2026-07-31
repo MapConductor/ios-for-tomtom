@@ -50,13 +50,15 @@ final class TomTomPolylineRenderer: AbstractPolylineOverlayRenderer<TomTomActual
         let finger = current.fingerPrint
         let prevFinger = prev.fingerPrint
 
-        // Color/width are immutable on `Line`; re-create when they change.
-        if finger.strokeColor != prevFinger.strokeColor || finger.strokeWidth != prevFinger.strokeWidth {
+        // `Line` は lineColor/lineWidth が options 側のみで immutable。さらに `coordinates` は
+        // stored property でエンジンにブリッジされず、代入しても再描画されない（＝マーカーの
+        // ドラッグに追従しない）。よって見た目に関わる変更はすべて作り直す。
+        if finger.strokeColor != prevFinger.strokeColor ||
+            finger.strokeWidth != prevFinger.strokeWidth ||
+            finger.points != prevFinger.points ||
+            finger.geodesic != prevFinger.geodesic {
             map?.remove(annotation: polyline)
             return await createPolyline(state: current.state)
-        }
-        if finger.points != prevFinger.points || finger.geodesic != prevFinger.geodesic {
-            polyline.coordinates = coordinates(current.state.points, geodesic: current.state.geodesic)
         }
         return polyline
     }
@@ -64,6 +66,16 @@ final class TomTomPolylineRenderer: AbstractPolylineOverlayRenderer<TomTomActual
     override func removePolyline(entity: PolylineEntity<TomTomActualPolyline>) async {
         if let line = entity.polyline {
             map?.remove(annotation: line)
+        }
+    }
+
+    /// 既存の全ラインを削除して再追加し、最前面（他アノテーションの上）へ移動する。
+    /// TomTom には z-index / 並び替え API が無く、描画順は追加順だけで決まるため、
+    /// 下のレイヤー（円/ポリゴン）が再生成された後に呼び出して重なり順を回復する。
+    func reAddOnTop(_ entities: [PolylineEntity<TomTomActualPolyline>]) async {
+        for entity in entities {
+            if let line = entity.polyline { map?.remove(annotation: line) }
+            entity.polyline = await createPolyline(state: entity.state)
         }
     }
 }

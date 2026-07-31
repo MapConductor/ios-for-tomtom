@@ -9,12 +9,7 @@ public struct TomTomMapView: View {
     @ObservedObject private var state: TomTomMapViewState
 
     private let apiKey: String?
-    private let onMapLoaded: OnMapLoadedHandler<TomTomMapViewState>?
-    private let onMapClick: OnMapEventHandler?
-    private let onMapLongClick: OnMapEventHandler?
-    private let onCameraMoveStart: OnCameraMoveHandler?
-    private let onCameraMove: OnCameraMoveHandler?
-    private let onCameraMoveEnd: OnCameraMoveHandler?
+    private let handlers: MapViewHandlers<TomTomMapViewState>
     private let content: () -> MapViewContent
 
     /// - Parameter apiKey: TomTom Orbis Maps API key. If `nil`, it is read from the app's
@@ -28,40 +23,35 @@ public struct TomTomMapView: View {
         onCameraMoveStart: OnCameraMoveHandler? = nil,
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
+        sdkInitialize: (() -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
         self.apiKey = apiKey
-        self.onMapLoaded = onMapLoaded
-        self.onMapClick = onMapClick
-        self.onMapLongClick = onMapLongClick
-        self.onCameraMoveStart = onCameraMoveStart
-        self.onCameraMove = onCameraMove
-        self.onCameraMoveEnd = onCameraMoveEnd
+        self.handlers = MapViewHandlers(
+            onMapLoaded: onMapLoaded,
+            onMapClick: onMapClick,
+            onMapLongClick: onMapLongClick,
+            onCameraMoveStart: onCameraMoveStart,
+            onCameraMove: onCameraMove,
+            onCameraMoveEnd: onCameraMoveEnd,
+            sdkInitialize: sdkInitialize
+        )
         self.content = content
     }
 
     public var body: some View {
         let mapContent = content()
-        return ZStack {
+        return MapViewBase(
+            attributionRules: state.mapDesignType.attributionRules,
+            camera: state.cameraPosition,
+            content: mapContent
+        ) {
             TomTomMapViewRepresentable(
                 state: state,
                 apiKey: apiKey,
-                onMapLoaded: onMapLoaded,
-                onMapClick: onMapClick,
-                onMapLongClick: onMapLongClick,
-                onCameraMoveStart: onCameraMoveStart,
-                onCameraMove: onCameraMove,
-                onCameraMoveEnd: onCameraMoveEnd,
+                handlers: handlers,
                 content: mapContent
-            )
-            ForEach(0..<mapContent.views.count, id: \.self) { index in
-                mapContent.views[index]
-            }
-            MapAttributionOverlay(
-                designRules: state.mapDesignType.attributionRules,
-                rasterLayers: mapContent.rasterLayers,
-                camera: state.cameraPosition
             )
         }
     }
@@ -92,24 +82,11 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: TomTomMapViewState
 
     let apiKey: String?
-    let onMapLoaded: OnMapLoadedHandler<TomTomMapViewState>?
-    let onMapClick: OnMapEventHandler?
-    let onMapLongClick: OnMapEventHandler?
-    let onCameraMoveStart: OnCameraMoveHandler?
-    let onCameraMove: OnCameraMoveHandler?
-    let onCameraMoveEnd: OnCameraMoveHandler?
+    let handlers: MapViewHandlers<TomTomMapViewState>
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(
-            state: state,
-            onMapLoaded: onMapLoaded,
-            onMapClick: onMapClick,
-            onMapLongClick: onMapLongClick,
-            onCameraMoveStart: onCameraMoveStart,
-            onCameraMove: onCameraMove,
-            onCameraMoveEnd: onCameraMoveEnd
-        )
+        Coordinator(state: state, handlers: handlers)
     }
 
     private func resolvedApiKey() -> String {
@@ -118,6 +95,9 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> TomTomWrapperView {
+        if let sdkInitialize = handlers.sdkInitialize {
+            Coordinator.runOnce(sdkInitialize)
+        }
         let options = MapOptions(
             mapStyle: (state.mapDesignType as? TomTomMapDesign)?.styleContainer,
             apiKey: resolvedApiKey(),
@@ -131,8 +111,9 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         context.coordinator.attachInfoBubbleContainer(to: wrapper)
         context.coordinator.mapView = mapView
 
+        let apiKey = resolvedApiKey()
         mapView.getMapAsync { map in
-            context.coordinator.onMapReady(mapView: mapView, map: map)
+            context.coordinator.onMapReady(mapView: mapView, map: map, apiKey: apiKey)
             context.coordinator.updateContent(content)
         }
         return wrapper
@@ -148,15 +129,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, MapDelegate {
-        private let state: TomTomMapViewState
-        private let onMapLoaded: OnMapLoadedHandler<TomTomMapViewState>?
-        private let onMapClick: OnMapEventHandler?
-        private let onMapLongClick: OnMapEventHandler?
-        private let onCameraMoveStart: OnCameraMoveHandler?
-        private let onCameraMove: OnCameraMoveHandler?
-        private let onCameraMoveEnd: OnCameraMoveHandler?
-
+    final class Coordinator: MapViewCoordinatorBase<TomTomMapViewState>, MapDelegate {
         weak var mapView: MapView?
         private weak var map: TomTomMap?
         private var controller: TomTomMapViewController?
@@ -164,12 +137,13 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         private var polylineController: TomTomPolylineController?
         private var polygonController: TomTomPolygonController?
         private var circleController: TomTomCircleController?
+        private var groundImageController: TomTomGroundImageController?
+        private var rasterController: TomTomRasterLayerController?
+        private var overlayScope: MapOverlayScope?
         private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
 
-        private var didCallMapLoaded = false
         private var cameraMoving = false
         private var appliedDesignId: String?
-        fileprivate let infoBubbleContainer = PassthroughContainerView()
 
         // Custom drag state (TomTom has no native marker drag).
         private var dragRecognizer: MarkerDragGestureRecognizer?
@@ -179,25 +153,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         private var savedDisabledGestures: [MapGestureDisableOption] = []
         private static let dragSlop: CGFloat = 12.0
 
-        init(
-            state: TomTomMapViewState,
-            onMapLoaded: OnMapLoadedHandler<TomTomMapViewState>?,
-            onMapClick: OnMapEventHandler?,
-            onMapLongClick: OnMapEventHandler?,
-            onCameraMoveStart: OnCameraMoveHandler?,
-            onCameraMove: OnCameraMoveHandler?,
-            onCameraMoveEnd: OnCameraMoveHandler?
-        ) {
-            self.state = state
-            self.onMapLoaded = onMapLoaded
-            self.onMapClick = onMapClick
-            self.onMapLongClick = onMapLongClick
-            self.onCameraMoveStart = onCameraMoveStart
-            self.onCameraMove = onCameraMove
-            self.onCameraMoveEnd = onCameraMoveEnd
-        }
-
-        func onMapReady(mapView: MapView, map: TomTomMap) {
+        func onMapReady(mapView: MapView, map: TomTomMap, apiKey: String) {
             self.map = map
             map.delegate = self
             // 初期スタイルは MapOptions で読み込み済みなので、同一 design の再適用を防ぐ。
@@ -206,13 +162,41 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             let controller = TomTomMapViewController(mapView: mapView, map: map)
             self.controller = controller
             state.setController(controller)
-            state.setMapViewHolder(controller.holder)
+            state.setMapViewHolder(controller.typedHolder)
 
             let markerController = TomTomMarkerController(map: map)
             self.markerController = markerController
-            self.polylineController = TomTomPolylineController(map: map)
-            self.polygonController = TomTomPolygonController(map: map)
-            self.circleController = TomTomCircleController(map: map)
+            let polylineController = TomTomPolylineController(map: map)
+            self.polylineController = polylineController
+            let polygonController = TomTomPolygonController(map: map)
+            self.polygonController = polygonController
+            let circleController = TomTomCircleController(map: map)
+            self.circleController = circleController
+            let groundImageController = TomTomGroundImageController(map: map)
+            self.groundImageController = groundImageController
+            let rasterController = TomTomRasterLayerController(
+                map: map,
+                apiKey: apiKey,
+                fallbackDesign: (state.mapDesignType as? TomTomMapDesign) ?? .Standard
+            )
+            self.rasterController = rasterController
+
+            // Route the simple overlays through the shared collector so each
+            // controller subscribes to one source of truth instead of the map
+            // host re-diffing arrays every render.
+            let overlayScope = MapOverlayScope()
+            self.overlayScope = overlayScope
+            bindOverlayCollector(overlayScope.circleCollector, to: circleController)
+            bindOverlayCollector(overlayScope.polylineCollector, to: polylineController)
+            bindOverlayCollector(overlayScope.polygonCollector, to: polygonController)
+            bindOverlayCollector(overlayScope.rasterLayerCollector, to: rasterController)
+            bindOverlayCollector(overlayScope.groundImageCollector, to: groundImageController)
+
+            // 円は radius 変更のたびに polygon を作り直して最前面へ来るため、
+            // 描画後にポリラインを最前面へ戻す（TomTom は z-index 未対応で描画順＝追加順）。
+            self.circleController?.renderer.onAfterRender = { [weak self] in
+                await self?.polylineController?.bringToFront()
+            }
 
             self.infoBubbleCoordinator = InfoBubbleOverlayCoordinator(
                 container: infoBubbleContainer,
@@ -250,15 +234,21 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             // styleContainer を差し替える。毎フレーム再設定するとスタイル再読み込みで画面が黒く点滅する。
             guard appliedDesignId != ttDesign.id else { return }
             appliedDesignId = ttDesign.id
-            map.styleContainer = ttDesign.styleContainer
+            if let rasterController {
+                rasterController.updateDesign(ttDesign)
+            } else {
+                map.styleContainer = ttDesign.styleContainer
+            }
         }
 
         func updateContent(_ content: MapViewContent) {
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
             markerController?.syncMarkers(content.markers)
-            polylineController?.syncPolylines(content.polylines)
-            polygonController?.syncPolygons(content.polygons)
-            circleController?.syncCircles(content.circles)
+            overlayScope?.circleCollector.sync(content.circles.map { $0.state })
+            overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
+            overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
+            overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
+            overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
             infoBubbleCoordinator?.updateAllLayouts()
         }
 
@@ -277,16 +267,16 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                    let markerState = markerController?.getMarkerState(for: id) {
                     markerController?.dispatchClick(state: markerState)
                 } else if let line = annotation as? TomTomActualPolyline {
-                    // 円の枠線 polyline は円のクリックとして扱う（合成 circle の stroke レイヤー）。
-                    if let tag = line.tag, tag.hasPrefix("circle-stroke-") {
-                        circleController?.dispatchClick(forTag: String(tag.dropFirst("circle-stroke-".count)), at: coordinate)
-                    } else {
-                        polylineController?.dispatchClick(forTag: line.tag, at: coordinate)
-                    }
+                    polylineController?.dispatchClick(forTag: line.tag, at: coordinate)
                 } else if let polygon = annotation as? TomTomActualPolygon {
-                    polygonController?.dispatchClick(forTag: polygon.tag, at: coordinate)
-                } else if let circle = annotation as? TomTomSDKMapDisplay.Circle {
-                    circleController?.dispatchClick(forTag: circle.tag, at: coordinate)
+                    if groundImageController?.dispatchClick(forTag: polygon.tag, at: coordinate) == true {
+                        break
+                    } else if let tag = polygon.tag, tag.hasPrefix("circle-") {
+                        // 円は "circle-" 接頭辞の Polygon として描画するため円のクリックに振り分ける。
+                        circleController?.dispatchClick(forTag: String(tag.dropFirst("circle-".count)), at: coordinate)
+                    } else {
+                        polygonController?.dispatchClick(forTag: polygon.tag, at: coordinate)
+                    }
                 }
             case let .longPressed(coordinate):
                 let point = coordinate.toGeoPoint()
@@ -317,8 +307,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                 controller?.notifyCameraMoveEnd(camera)
                 onCameraMoveEnd?(camera)
                 infoBubbleCoordinator?.updateAllLayouts()
-                if !didCallMapLoaded {
-                    didCallMapLoaded = true
+                performMapLoadedOnce {
                     controller?.notifyMapInitialized()
                     onMapLoaded?(state)
                 }
@@ -398,17 +387,6 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             }
         }
 
-        // MARK: - InfoBubble container
-
-        func attachInfoBubbleContainer(to hostView: UIView) {
-            guard infoBubbleContainer.superview !== hostView else { return }
-            infoBubbleContainer.backgroundColor = .clear
-            infoBubbleContainer.isUserInteractionEnabled = true
-            infoBubbleContainer.frame = hostView.bounds
-            infoBubbleContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            hostView.addSubview(infoBubbleContainer)
-        }
-
         func unbind() {
             state.setController(nil)
             state.setMapViewHolder(nil)
@@ -424,6 +402,12 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             polygonController = nil
             circleController?.unbind()
             circleController = nil
+            groundImageController?.unbind()
+            groundImageController = nil
+            rasterController?.unbind()
+            rasterController = nil
+            overlayScope?.clear()
+            overlayScope = nil
             infoBubbleCoordinator?.unbind()
             infoBubbleCoordinator = nil
             controller = nil

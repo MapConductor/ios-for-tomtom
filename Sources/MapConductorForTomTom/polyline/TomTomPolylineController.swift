@@ -40,6 +40,11 @@ final class TomTomPolylineController: PolylineController<TomTomActualPolyline, T
         for polyline in polylines { subscribe(polyline.state) }
     }
 
+    /// ポリラインを最前面へ再追加する（円/ポリゴンの再生成で下に潜るのを防ぐ）。
+    func bringToFront() async {
+        await renderer.reAddOnTop(polylineManager.allEntities())
+    }
+
     /// Dispatch a click for the tapped native line (matched by tag == state.id).
     func dispatchClick(forTag tag: String?, at coordinate: CLLocationCoordinate2D) {
         guard let tag, let entity = polylineManager.getEntity(tag) else { return }

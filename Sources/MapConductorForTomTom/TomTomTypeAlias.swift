@@ -7,6 +7,7 @@ import TomTomSDKMapDisplay
 public typealias TomTomActualMarker = TomTomSDKMapDisplay.Marker
 public typealias TomTomActualPolyline = TomTomSDKMapDisplay.Line
 public typealias TomTomActualPolygon = TomTomSDKMapDisplay.Polygon
+public typealias TomTomActualGroundImage = TomTomSDKMapDisplay.Polygon
 
-// Circle は塗り（native circle）+ 枠線（polyline）の2レイヤー合成のためハンドルで保持する。
-public typealias TomTomActualCircle = TomTomCircleHandle
+// Circle は単一の native Polygon（64分割リング）として描画する。
+public typealias TomTomActualCircle = TomTomSDKMapDisplay.Polygon
