@@ -277,6 +277,9 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                     } else {
                         polygonController?.dispatchClick(forTag: polygon.tag, at: coordinate)
                     }
+                } else if let overlay = annotation as? PolygonOverlay {
+                    // 穴ありポリゴンの塗りは PolygonOverlay で描くため、その tap もポリゴンへ回す。
+                    polygonController?.dispatchClick(forTag: overlay.tag, at: coordinate)
                 }
             case let .longPressed(coordinate):
                 let point = coordinate.toGeoPoint()

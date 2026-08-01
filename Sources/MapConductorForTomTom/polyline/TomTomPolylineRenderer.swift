@@ -20,7 +20,9 @@ final class TomTomPolylineRenderer: AbstractPolylineOverlayRenderer<TomTomActual
     private func maxSegmentLengthMeters() -> Double {
         let zoom = map?.cameraProperties.zoom ?? 11.0
         let metersPerPixel = 40_075_016.686 / (256.0 * pow(2.0, zoom))
-        return metersPerPixel * 64.0
+        // ズームアウト時にセグメントが粗くなりすぎて geodesic が直線同然になるのを防ぐ
+        // （android-sdk と同じ上限。polygon は三角形分割のちらつき対策で polyline より粗め）。
+        return min(metersPerPixel * 64.0, 50_000.0)
     }
 
     private func coordinates(_ points: [GeoPointProtocol], geodesic: Bool) -> [CLLocationCoordinate2D] {
