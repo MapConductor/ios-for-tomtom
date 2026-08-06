@@ -14,6 +14,10 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     private var cameraMoveStartListener: OnCameraMoveHandler?
     private var cameraMoveListener: OnCameraMoveHandler?
     private var cameraMoveEndListener: OnCameraMoveHandler?
+
+    /// TomTom はネイティブのカメラ範囲制限 API を持たないため、android-for-tomtom と同じく
+    /// カメラ停止（steady）時に矩形内へクランプして再適用する方式で制限する。
+    private let cameraRestrictionClamp = CameraRestrictionClamp()
     private var mapClickListener: OnMapEventHandler?
     private var mapLongClickListener: OnMapEventHandler?
     private var mapInitializedListener: OnMapInitializedHandler?
@@ -63,6 +67,18 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     func notifyCameraMoveStart(_ camera: MapCameraPosition) { cameraMoveStartListener?(camera) }
     func notifyCameraMove(_ camera: MapCameraPosition) { cameraMoveListener?(camera) }
     func notifyCameraMoveEnd(_ camera: MapCameraPosition) { cameraMoveEndListener?(camera) }
+
+    func setCameraRestriction(_ restriction: CameraRestriction?) {
+        cameraRestrictionClamp.set(restriction)
+    }
+
+    /// カメラ停止時に制限違反を補正する。補正したら `true`（通常のカメラ停止処理はスキップし、
+    /// 再適用後に再発火する steady で通常フローへ進む）。android-for-tomtom と同一仕様。
+    func applyCameraRestrictionCorrectionIfNeeded(_ current: MapCameraPosition) -> Bool {
+        guard let corrected = cameraRestrictionClamp.correction(for: current) else { return false }
+        moveCamera(position: corrected)
+        return true
+    }
     func notifyMapClick(_ point: GeoPoint) { mapClickListener?(point) }
     func notifyMapLongClick(_ point: GeoPoint) { mapLongClickListener?(point) }
     func notifyMapInitialized() { mapInitializedListener?(.MapCreated) }

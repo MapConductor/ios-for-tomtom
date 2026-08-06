@@ -2,6 +2,7 @@ import Combine
 import CoreGraphics
 import MapConductorCore
 import TomTomSDKMapDisplay
+import UIKit
 
 /// Core + markers scope: a straightforward native-marker controller (no tile rendering).
 @MainActor
@@ -11,9 +12,6 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
     private var markerStatesById: [String: MarkerState] = [:]
     private var markerSubscriptions: [String: AnyCancellable] = [:]
 
-    /// Points radius for treating a touch as a hit on a marker (used by drag hit-testing).
-    private static let tapTolerancePoints: CGFloat = 44.0
-
     init(map: TomTomMap?) {
         self.map = map
         let markerManager = MarkerManager<TomTomActualMarker>.defaultManager()
@@ -21,8 +19,13 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
         super.init(markerManager: markerManager, renderer: renderer)
     }
 
-    /// Screen-distance hit-test used by the custom drag gesture. Returns the nearest marker only
-    /// when the touch lands within `tapTolerancePoints` of its rendered position.
+    /// Screen-space hit-test used by the custom drag gesture.
+    ///
+    /// 判定は他プロバイダと同じ ``MarkerHitTest``（アイコン矩形 + `tapTolerance`）。以前は
+    /// アイコンの大きさを見ない固定半径で、さらに `tapTolerance`（ポイント）へ
+    /// `UIScreen.main.scale` を掛けていたため、`pointForCoordinate` が返すポイント座標に対して
+    /// 許容量が 2〜3 倍に膨らんでいた。Android が dp × density としているのは、あちらの画面座標が
+    /// px だから。iOS のポイントは既に dp 相当なので倍率は掛けない。
     override func find(position: GeoPointProtocol) -> MarkerEntity<TomTomActualMarker>? {
         guard let nearest = markerManager.findNearest(position: position) else { return nil }
         // The base `find` is nonisolated; our drag hit-test always runs on the main thread
@@ -34,9 +37,11 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
             else {
                 return nil
             }
-            let dx = touchPoint.x - markerPoint.x
-            let dy = touchPoint.y - markerPoint.y
-            return (dx * dx + dy * dy).squareRoot() <= Self.tapTolerancePoints ? nearest : nil
+            return MarkerHitTest.hitsIcon(
+                touchScreen: touchPoint,
+                markerScreen: markerPoint,
+                state: nearest.state
+            ) ? nearest : nil
         }
     }
 

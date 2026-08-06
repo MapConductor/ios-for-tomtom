@@ -42,7 +42,7 @@ final class TomTomPolygonRenderer: AbstractPolygonOverlayRenderer<TomTomActualPo
     /// リングを線形補間すると過密になり TomTom の描画が失敗するため）。
     private func interpolatedGeo(_ points: [GeoPointProtocol], geodesic: Bool) -> [GeoPointProtocol] {
         let geo = geodesic
-            ? createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
+            ? WGS84Geodesic.createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
             : points
         guard let first = geo.first, let last = geo.last else { return geo }
         if geo.count >= 2, first.latitude == last.latitude, first.longitude == last.longitude {
@@ -58,8 +58,13 @@ final class TomTomPolygonRenderer: AbstractPolygonOverlayRenderer<TomTomActualPo
             .map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
     }
 
-    /// 複数の穴が重なっている場合は結合（union）して重複を解消する
-    /// （他プロバイダと同じ `unionHoles`）。
+    /// 複数の穴が重なっている場合は結合（union）して重複を解消する。
+    /// 他プロバイダ（ArcGIS/Mapbox/MapLibre/HERE/Google）と同じ `unionHoles()` を用いる。
+    ///
+    /// PolygonOverlay の入れ子は「外周 → 穴」の同心チェインなので、重なった穴をそのまま
+    /// 渡すと入れ子の内側が再び塗られてしまう。コンポーネント層（`Polygon`）のユニオンは
+    /// state 1 インスタンスにつき 1 回きりで、頂点ドラッグ後の `state.holes` 差し替えには
+    /// 追従しないため、android-for-tomtom と同じくここでも結合する。
     private func resolveHoles(_ state: PolygonState) -> PolygonState {
         state.holes.count > 1 ? state.unionHoles() : state
     }

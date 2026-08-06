@@ -27,8 +27,8 @@ final class TomTomPolylineRenderer: AbstractPolylineOverlayRenderer<TomTomActual
 
     private func coordinates(_ points: [GeoPointProtocol], geodesic: Bool) -> [CLLocationCoordinate2D] {
         let geo = geodesic
-            ? createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
-            : createLinearInterpolatePoints(points)
+            ? WGS84Geodesic.createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
+            : Planar.createInterpolatePoints(points)
         return geo.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
     }
 

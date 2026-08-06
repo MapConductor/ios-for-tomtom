@@ -10,6 +10,7 @@ public struct TomTomMapView: View {
 
     private let apiKey: String?
     private let handlers: MapViewHandlers<TomTomMapViewState>
+    private let cameraRestriction: CameraRestriction?
     private let content: () -> MapViewContent
 
     /// - Parameter apiKey: TomTom Orbis Maps API key. If `nil`, it is read from the app's
@@ -17,6 +18,7 @@ public struct TomTomMapView: View {
     public init(
         state: TomTomMapViewState,
         apiKey: String? = nil,
+        cameraRestriction: CameraRestriction? = nil,
         onMapLoaded: OnMapLoadedHandler<TomTomMapViewState>? = nil,
         onMapClick: OnMapEventHandler? = nil,
         onMapLongClick: OnMapEventHandler? = nil,
@@ -28,6 +30,7 @@ public struct TomTomMapView: View {
     ) {
         self.state = state
         self.apiKey = apiKey
+        self.cameraRestriction = cameraRestriction
         self.handlers = MapViewHandlers(
             onMapLoaded: onMapLoaded,
             onMapClick: onMapClick,
@@ -41,7 +44,13 @@ public struct TomTomMapView: View {
     }
 
     public var body: some View {
-        let mapContent = content()
+        // The provider's registry is in scope only while content is being assembled —
+        // the same window in which Compose provides `LocalMapServiceRegistry` around the
+        // content lambda. Bracketing the pass lets a removed plugin be noticed.
+        let support = state.serviceRegistry.get(MarkerRenderingSupportKey.self)
+        support?.beginContentPass()
+        let mapContent = MapServiceRegistryScope.with(state.serviceRegistry) { content() }
+        support?.endContentPass()
         return MapViewBase(
             attributionRules: state.mapDesignType.attributionRules,
             camera: state.cameraPosition,
@@ -49,6 +58,7 @@ public struct TomTomMapView: View {
         ) {
             TomTomMapViewRepresentable(
                 state: state,
+                cameraRestriction: cameraRestriction,
                 apiKey: apiKey,
                 handlers: handlers,
                 content: mapContent
@@ -80,6 +90,7 @@ private final class TomTomWrapperView: UIView {
 
 private struct TomTomMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: TomTomMapViewState
+    let cameraRestriction: CameraRestriction?
 
     let apiKey: String?
     let handlers: MapViewHandlers<TomTomMapViewState>
@@ -120,7 +131,10 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: TomTomWrapperView, context: Context) {
+        // 制限値が変わったときだけ再適用する。
+        context.coordinator.applyCameraRestriction(cameraRestriction)
         context.coordinator.applyDesign(state.mapDesignType)
+        context.coordinator.updateGestures(state.uiSettings)
         context.coordinator.updateContent(content)
     }
 
@@ -130,10 +144,29 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
 
     @MainActor
     final class Coordinator: MapViewCoordinatorBase<TomTomMapViewState>, MapDelegate {
+        /// android-sdk の `cameraRestriction?.let { controller.setCameraRestriction(it) }` 相当。
+        func applyCameraRestriction(_ restriction: CameraRestriction?) {
+            applyCameraRestriction(restriction, to: controller)
+        }
+
         weak var mapView: MapView?
         private weak var map: TomTomMap?
         private var controller: TomTomMapViewController?
         private var markerController: TomTomMarkerController?
+
+        /// マーカークラスタリング等のプラグインへ公開する描画 capability。
+        /// android-for-tomtom が `MarkerRenderingSupportKey` に登録するのと同じ役割で、
+        /// プラグイン側が `MapServiceRegistry` から引き当てて `connect` する。
+        private lazy var strategyManager = StrategyMarkerManager<TomTomActualMarker, TomTomMarkerRenderer>(
+            makeRenderer: { [weak self] _ in
+                TomTomMarkerRenderer(map: self?.map)
+            },
+            shouldAddMarkers: { [weak self] in self?.map != nil },
+            currentCamera: { [weak self] in self?.lastCameraPosition }
+        )
+
+        /// クラスタ再計算に渡す直近のカメラ。`cameraSteady` / `cameraChanged` で更新する。
+        private var lastCameraPosition: MapCameraPosition?
         private var polylineController: TomTomPolylineController?
         private var polygonController: TomTomPolygonController?
         private var circleController: TomTomCircleController?
@@ -150,8 +183,30 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         private var pendingDragEntity: MarkerEntity<TomTomActualMarker>?
         private var draggingEntity: MarkerEntity<TomTomActualMarker>?
         private var dragDownPoint: CGPoint = .zero
-        private var savedDisabledGestures: [MapGestureDisableOption] = []
+        /// What `uiSettings` asks to disable. Marker dragging layers `.pan` on top
+        /// of this temporarily and restores back to it, so a re-render during a
+        /// drag cannot clobber the app's setting.
+        private var desiredDisabledGestures: [MapGestureDisableOption] = []
+        private var isDraggingMarker: Bool { pendingDragEntity != nil }
         private static let dragSlop: CGFloat = 12.0
+
+        /// TomTom takes the inverse of a gesture allow-list: everything not named
+        /// here stays enabled.
+        func updateGestures(_ ui: MapUISettings) {
+            guard let map else { return }
+            var disabled: [MapGestureDisableOption] = []
+            if !ui.scrollGesture { disabled.append(.pan) }
+            if !ui.zoomGesture {
+                disabled.append(contentsOf: [.pinch, .doubleTap, .doubleTapAndPan, .twoFingerTap])
+            }
+            if !ui.rotateGesture { disabled.append(.rotate) }
+            if !ui.tiltGesture { disabled.append(.tilt) }
+            desiredDisabledGestures = disabled
+            // Mid-drag the map is deliberately frozen; the drag handler restores
+            // to `desiredDisabledGestures` when it finishes.
+            guard !isDraggingMarker else { return }
+            map.disabledGestures = disabled
+        }
 
         func onMapReady(mapView: MapView, map: TomTomMap, apiKey: String) {
             self.map = map
@@ -159,10 +214,23 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             // 初期スタイルは MapOptions で読み込み済みなので、同一 design の再適用を防ぐ。
             appliedDesignId = (state.mapDesignType as? TomTomMapDesign)?.id
 
+            updateGestures(state.uiSettings)
+
             let controller = TomTomMapViewController(mapView: mapView, map: map)
             self.controller = controller
             state.setController(controller)
+            // コントローラはマップ準備完了後に生成されるため、それまでに要求された
+            // cameraRestriction をここで適用する（android-for-tomtom がコントローラ生成直後に
+            // setCameraRestriction するのと同じ位置）。
+            reapplyCameraRestriction(to: controller)
             state.setMapViewHolder(controller.typedHolder)
+
+            // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
+            // from the registry; this provider never learns that clustering exists.
+            // 再バインド時に前回の capability が残らないよう、登録前に空にする
+            // （android-sdk の各 *MapView.kt が `registry.clear()` してから put するのと同じ）。
+            state.serviceRegistry.clear()
+            state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
 
             let markerController = TomTomMarkerController(map: map)
             self.markerController = markerController
@@ -300,16 +368,24 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                     onCameraMoveStart?(camera)
                 }
                 state.updateCameraPosition(camera)
+                lastCameraPosition = camera
                 controller?.notifyCameraMove(camera)
                 onCameraMove?(camera)
                 infoBubbleCoordinator?.updateAllLayouts()
+                Task { [weak self] in await self?.strategyManager.onCameraChanged(camera) }
             case let .cameraSteady(properties):
                 cameraMoving = false
                 let camera = camera(from: properties)
+                // 範囲・ズーム制限に違反していれば矩形内へ引き戻す（TomTom はネイティブの
+                // 範囲制限 API が無いため）。再適用すると再度 steady が発火し、そこでは
+                // 補正不要になり通常フローへ進む。android-for-tomtom と同一仕様。
+                if controller?.applyCameraRestrictionCorrectionIfNeeded(camera) == true { return }
                 state.updateCameraPosition(camera)
+                lastCameraPosition = camera
                 controller?.notifyCameraMoveEnd(camera)
                 onCameraMoveEnd?(camera)
                 infoBubbleCoordinator?.updateAllLayouts()
+                Task { [weak self] in await self?.strategyManager.onCameraChanged(camera) }
                 performMapLoadedOnce {
                     controller?.notifyMapInitialized()
                     onMapLoaded?(state)
@@ -357,8 +433,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             switch recognizer.state {
             case .began:
                 // Freeze the map so it doesn't pan while we drag the marker.
-                savedDisabledGestures = map.disabledGestures
-                map.disabledGestures = savedDisabledGestures + [.pan, .doubleTapAndPan]
+                map.disabledGestures = desiredDisabledGestures + [.pan, .doubleTapAndPan]
             case .changed:
                 guard let pending = pendingDragEntity else { return }
                 if draggingEntity == nil {
@@ -381,8 +456,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                     // No movement → treat as a tap on the (draggable) marker.
                     markerController.dispatchClick(state: pending.state)
                 }
-                map.disabledGestures = savedDisabledGestures
-                savedDisabledGestures = []
+                map.disabledGestures = desiredDisabledGestures
                 pendingDragEntity = nil
                 draggingEntity = nil
             default:
@@ -391,6 +465,8 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         }
 
         func unbind() {
+            // クラスタ用レンダラ／コントローラも破棄する（MapTiler / MapLibre と同じ後始末）。
+            strategyManager.clear()
             state.setController(nil)
             state.setMapViewHolder(nil)
             if let recognizer = dragRecognizer { mapView?.removeGestureRecognizer(recognizer) }
