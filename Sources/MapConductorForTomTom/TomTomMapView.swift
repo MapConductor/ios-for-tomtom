@@ -227,10 +227,10 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
 
             // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
             // from the registry; this provider never learns that clustering exists.
-            // 再バインド時に前回の capability が残らないよう、登録前に空にする
-            // （android-sdk の各 *MapView.kt が `registry.clear()` してから put するのと同じ）。
-            state.serviceRegistry.clear()
             state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+            // 拡張モジュール（ヒートマップ等）がオーバーレイコントローラを登録できるようにする。
+            // clear() の後に置くこと（先に置くと直後の clear() で消える）。
+            state.serviceRegistry.put(OverlayControllerRegistryKey.self, controller.overlayControllers)
 
             let markerController = TomTomMarkerController(map: map)
             self.markerController = markerController
@@ -465,8 +465,13 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         }
 
         func unbind() {
+            // 登録した capability を取り下げる。レジストリの持ち主は state で、ビューより長生きするため、
+            // ここで外さないと破棄済みのコントローラを掴んだまま残る。
+            state.serviceRegistry.removeProviderRegistrations()
             // クラスタ用レンダラ／コントローラも破棄する（MapTiler / MapLibre と同じ後始末）。
             strategyManager.clear()
+            // 登録済みオーバーレイコントローラ（拡張モジュール含む）を破棄する。
+            controller?.destroy()
             state.setController(nil)
             state.setMapViewHolder(nil)
             if let recognizer = dragRecognizer { mapView?.removeGestureRecognizer(recognizer) }

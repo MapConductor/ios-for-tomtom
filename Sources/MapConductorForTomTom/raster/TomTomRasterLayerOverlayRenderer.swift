@@ -7,6 +7,7 @@ final class TomTomRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
     private var specs: [String: TomTomRasterSpec] = [:]
 
     override func createLayer(state: RasterLayerState) async -> TomTomRasterLayer? {
+        RasterHeaderRuleSet.warnUnsupported(provider: "TomTom", state: state)
         updateSpec(state)
         return TomTomRasterLayer(id: state.id)
     }

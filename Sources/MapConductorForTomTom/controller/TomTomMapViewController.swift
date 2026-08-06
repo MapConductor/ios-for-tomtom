@@ -8,6 +8,11 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     let typedHolder: TomTomMapViewHolder
     let coroutine = CoroutineScope()
 
+    /// この地図に紐づくオーバーレイコントローラの登録簿。
+    /// 拡張モジュール（ヒートマップ、マーカークラスタリング等）がここに登録して
+    /// カメラ変更を受け取る。`MapViewControllerProtocol` の要件。
+    let overlayControllers = OverlayControllerRegistry()
+
     private weak var mapView: MapView?
     private weak var map: TomTomMap?
 
@@ -66,7 +71,11 @@ final class TomTomMapViewController: MapViewControllerProtocol {
 
     func notifyCameraMoveStart(_ camera: MapCameraPosition) { cameraMoveStartListener?(camera) }
     func notifyCameraMove(_ camera: MapCameraPosition) { cameraMoveListener?(camera) }
-    func notifyCameraMoveEnd(_ camera: MapCameraPosition) { cameraMoveEndListener?(camera) }
+    func notifyCameraMoveEnd(_ camera: MapCameraPosition) {
+        // 登録済みオーバーレイ（拡張モジュール含む）へ伝播する。
+        overlayControllers.dispatchCameraChanged(camera)
+        cameraMoveEndListener?(camera)
+    }
 
     func setCameraRestriction(_ restriction: CameraRestriction?) {
         cameraRestrictionClamp.set(restriction)
