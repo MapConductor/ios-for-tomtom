@@ -79,7 +79,7 @@ actor TomTomStyleComposer {
         return "https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=\(encoded)"
     }
 
-    private func rasterSource(_ source: RasterSource) -> [String: Any] {
+    private func rasterSource(_ source: RasterLayerSource) -> [String: Any] {
         switch source {
         case let .urlTemplate(template, tileSize, minZoom, maxZoom, _, scheme):
             return rasterTileSource(
@@ -95,7 +95,7 @@ actor TomTomStyleComposer {
             let base = serviceUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             return rasterTileSource(
                 template: "\(base)/tile/{z}/{y}/{x}",
-                tileSize: RasterSource.defaultTileSize,
+                tileSize: RasterLayerSource.defaultTileSize,
                 minZoom: nil,
                 maxZoom: nil,
                 scheme: .XYZ

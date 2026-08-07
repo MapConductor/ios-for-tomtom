@@ -10,7 +10,7 @@ final class TomTomRasterLayer {
 
 struct TomTomRasterSpec {
     let id: String
-    let source: RasterSource
+    let source: RasterLayerSource
     let opacity: Double
     let zIndex: Int
 }

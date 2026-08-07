@@ -9,9 +9,10 @@ let coreDependency: Package.Dependency = usingLocalCore
     ? .package(path: "../ios-sdk-core")
     : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.1.4")
 
-// TomTom Orbis Maps Display SDK (0.47.5) and its transitive closure, distributed as binary
+// TomTom Orbis Maps Display SDK (0.73.1) and its transitive closure, distributed as binary
 // xcframeworks from TomTom's public artifactory. Fetch them into `Frameworks/` with
-// `scripts/fetch-tomtom-sdk.sh` (they are not committed).
+// `scripts/fetch-tomtom-sdk.sh` (they are not committed). Keep this list in sync with
+// PODS in that script.
 let tomtomFrameworks = [
     "TomTomSDKMapDisplay",
     "TomTomSDKCommon",
@@ -19,6 +20,11 @@ let tomtomFrameworks = [
     "TomTomSDKLocationProvider",
     "TomTomSDKBindingMapDisplayEngineInternal",
     "TomTomSDKBindingFrameworkLoggingInternal",
+    "TomTomSDKBindingMapDisplayElasticDataProviderInternal",
+    "TomTomSDKMapTileStoreCommon",
+    "TomTomSDKTelemetry",
+    "TomTomSDKRoute",
+    "TomTomSDKRoutingCommon",
 ]
 
 let package = Package(
