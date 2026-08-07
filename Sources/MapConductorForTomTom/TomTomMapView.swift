@@ -219,6 +219,9 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             let controller = TomTomMapViewController(mapView: mapView, map: map)
             self.controller = controller
             state.setController(controller)
+            // 初期カメラは MapOptions 経由（コントローラ生成前）で適用されるため、負tilt の
+            // 復元ヒントをここで種付けする。これが無いと最初の読み戻しで tilt が正になる。
+            controller.seedLogicalTilt(state.cameraPosition.tilt)
             // コントローラはマップ準備完了後に生成されるため、それまでに要求された
             // cameraRestriction をここで適用する（android-for-tomtom がコントローラ生成直後に
             // setCameraRestriction するのと同じ位置）。
@@ -411,7 +414,10 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                     farRight: region.farRight.toGeoPoint()
                 )
             }
-            return properties.toMapCameraPosition(visibleRegion: visibleRegion)
+            return properties.toMapCameraPosition(
+                visibleRegion: visibleRegion,
+                logicalTiltHint: controller?.lastLogicalTilt
+            )
         }
 
         // MARK: - Custom marker drag

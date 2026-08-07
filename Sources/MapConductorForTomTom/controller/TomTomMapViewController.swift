@@ -27,6 +27,16 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     private var mapLongClickListener: OnMapEventHandler?
     private var mapInitializedListener: OnMapInitializedHandler?
 
+    /// 直近に要求した論理 tilt。tilt < 0 の擬似表現は SDK 側では正ピッチになるため、
+    /// カメラ状態の読み戻し時に元の負tilt を復元するヒントとして保持する
+    /// （android-for-tomtom の `lastLogicalCameraPosition` / MapLibre と同方針）。
+    private(set) var lastLogicalTilt: Double?
+
+    /// 初期カメラ（MapOptions 経由で適用され `moveCamera` を通らない）の論理 tilt を記録する。
+    func seedLogicalTilt(_ tilt: Double) {
+        lastLogicalTilt = tilt
+    }
+
     init(mapView: MapView, map: TomTomMap) {
         self.mapView = mapView
         self.map = map
@@ -47,10 +57,12 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     func setMapInitializedListener(listener: OnMapInitializedHandler?) { mapInitializedListener = listener }
 
     func moveCamera(position: MapCameraPosition) {
+        lastLogicalTilt = position.tilt
         map?.moveCamera(position.toCameraUpdate())
     }
 
     func animateCamera(position: MapCameraPosition, duration: Long) {
+        lastLogicalTilt = position.tilt
         map?.applyCamera(
             position.toCameraUpdate(),
             animationDuration: TimeInterval(duration) / 1000.0,
