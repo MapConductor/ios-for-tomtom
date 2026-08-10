@@ -77,15 +77,12 @@ public typealias TomTomActualPolyline = TomTomSDKMapDisplay.Line
 public typealias TomTomActualPolygon = TomTomSDKMapDisplay.Polygon
 public typealias TomTomActualGroundImage = TomTomSDKMapDisplay.Polygon
 public typealias TomTomActualCircle = TomTomSDKMapDisplay.Polygon
-final public class TomTomZoomAltitudeConverter : MapConductorCore.ZoomAltitudeConverterProtocol {
-  final public let zoom0Altitude: Swift.Double
+final public class TomTomZoomAltitudeConverter : MapConductorCore.GroundScaleZoomAltitudeConverter {
   public static let tomtomToGoogleZoomBaseOffset: Swift.Double
-  public init(zoom0Altitude: Swift.Double = 171_319_879.0)
+  public init(zoom0Altitude: Swift.Double = AbstractZoomAltitudeConverter.defaultZoom0Altitude)
   public static func zoomOffset(at latitude: Swift.Double) -> Swift.Double
   public static func tomtomZoomToGoogleZoom(_ tomtomZoom: Swift.Double, latitude: Swift.Double = 0.0) -> Swift.Double
   public static func googleZoomToTomTomZoom(_ googleZoom: Swift.Double, latitude: Swift.Double = 0.0) -> Swift.Double
-  final public func zoomLevelToAltitude(zoomLevel: Swift.Double, latitude: Swift.Double, tilt: Swift.Double) -> Swift.Double
-  final public func altitudeToZoomLevel(altitude: Swift.Double, latitude: Swift.Double, tilt: Swift.Double) -> Swift.Double
   @objc deinit
 }
 @_hasMissingDesignatedInitializers final public class TomTomMapViewHolder : MapConductorCore.MapViewHolderProtocol {
