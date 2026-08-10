@@ -255,6 +255,15 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
             // Route the simple overlays through the shared collector so each
             // controller subscribes to one source of truth instead of the map
             // host re-diffing arrays every render.
+            // クリックカスケードとスロット解決がここから kind で引く。
+            // **登録を忘れるとタップに反応しなくなる。**
+            controller.registerOverlayController(markerController)
+            controller.registerOverlayController(circleController)
+            controller.registerOverlayController(polylineController)
+            controller.registerOverlayController(polygonController)
+            controller.registerOverlayController(groundImageController)
+            controller.registerOverlayController(rasterController)
+
             let overlayScope = MapOverlayScope()
             self.overlayScope = overlayScope
             bindOverlayCollector(overlayScope.circleCollector, to: circleController)
@@ -330,6 +339,17 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
         func map(_ map: TomTomMap, onInteraction interaction: MapInteraction) {
             switch interaction {
             case let .tapped(coordinate):
+                // ★ ここでコアの dispatchOverlayTap を呼んではいけない。
+                //
+                // TomTom はオーバーレイのタップを `.tappedOnAnnotation` で通知し、
+                // annotation の tag から**どの実体か**まで教えてくれる（下の分岐）。
+                // 幾何ヒットテストより正確なので、そちらを使い続ける。
+                // この `.tapped` は「どの annotation にも当たらなかった」タップなので、
+                // ここでカスケードを回すと、ネイティブが当たらないと判断したものを
+                // 幾何判定で拾い直すことになり、挙動が変わる。
+                //
+                // 他プロバイダのように重複したカスケードを持っているわけではないので、
+                // 畳む対象が無い。android-for-tomtom も同じ判断（1-18 の nativeFirst）。
                 let point = coordinate.toGeoPoint()
                 controller?.notifyMapClick(point)
                 onMapClick?(point)
