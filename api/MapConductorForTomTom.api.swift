@@ -76,7 +76,6 @@ final public class TomTomZoomAltitudeConverter : MapConductorCore.GroundScaleZoo
   final public let mapView: TomTomSDKMapDisplay.MapView
   final public let map: TomTomSDKMapDisplay.TomTomMap
   final public func toScreenOffset(position: any MapConductorCore.GeoPointProtocol) -> CoreFoundation.CGPoint?
-  final public func fromScreenOffset(offset: CoreFoundation.CGPoint) async -> MapConductorCore.GeoPoint?
   final public func fromScreenOffsetSync(offset: CoreFoundation.CGPoint) -> MapConductorCore.GeoPoint?
   public typealias ActualMap = TomTomSDKMapDisplay.TomTomMap
   public typealias ActualMapView = TomTomSDKMapDisplay.MapView

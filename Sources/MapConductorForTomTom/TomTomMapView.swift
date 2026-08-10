@@ -275,6 +275,7 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                     map?.pointForCoordinate(coordinate: CLLocationCoordinate2D(
                         latitude: point.latitude, longitude: point.longitude))
                 },
+                projectionGate: screenProjectionGate(feature: "InfoBubble"),
                 resolveMarkerStateForIcon: { [weak markerController] id, bubbleMarker in
                     markerController?.getMarkerState(for: id) ?? bubbleMarker
                 },
@@ -289,7 +290,8 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                 project: { [weak map] point in
                     map?.pointForCoordinate(coordinate: CLLocationCoordinate2D(
                         latitude: point.latitude, longitude: point.longitude))
-                }
+                },
+                projectionGate: screenProjectionGate(feature: "marker animation overlay")
             )
 
             // Custom marker-drag gesture (grab-on-move, click-on-release).
