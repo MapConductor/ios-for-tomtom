@@ -103,6 +103,27 @@ actor TomTomStyleComposer {
         }
     }
 
+    /// この SDK は宣言した `tileSize` の**倍の大きさ**でタイルを敷く。
+    ///
+    /// MapConductor の `tileSize` は「1 枚のタイルが覆うレイアウト単位（ポイント）」で、
+    /// MapLibre はそのとおりに敷く。同じスタイル JSON を渡しているのに、この SDK は
+    /// 1 段粗いズームのタイルを取ってきて 2 倍に引き伸ばす。
+    ///
+    /// 実測（地図ズーム 13、`tileSize` 512 の GeoJSON レイヤ、iPhone シミュレータ）:
+    ///
+    /// | 宣言 | 要求されるタイル z | 線の太さ |
+    /// |---|---|---|
+    /// | MapLibre 512 | 12 | 18px |
+    /// | TomTom 512 | **11** | **35px** |
+    /// | TomTom 256 | 12 | 17px |
+    ///
+    /// 地図ズーム 13 では世界が 256×2^13 ポイントなので、512 ポイントのタイルは z=12 が正しい。
+    /// MapLibre が正で、この SDK だけ 1 段ずれている。半分を宣言するとちょうど揃う。
+    ///
+    /// **ここを外すと GeoJSON レイヤ・ヒートマップ・タイル方式マーカーが揃って
+    /// 2 倍に描かれる**（線が異常に太く、しかもぼやける）。
+    private static let tileSizeScale = 2
+
     private func rasterTileSource(
         template: String,
         tileSize: Int,
@@ -113,7 +134,7 @@ actor TomTomStyleComposer {
         var source: [String: Any] = [
             "type": "raster",
             "tiles": [template],
-            "tileSize": tileSize,
+            "tileSize": max(1, tileSize / Self.tileSizeScale),
         ]
         if let minZoom { source["minzoom"] = minZoom }
         if let maxZoom { source["maxzoom"] = maxZoom }
