@@ -355,10 +355,15 @@ private struct TomTomMapViewRepresentable: UIViewRepresentable {
                 onMapClick?(point)
             case let .tappedOnAnnotation(annotation, coordinate):
                 // Non-draggable markers get their tap here; draggable ones are handled by the drag recognizer.
-                if let marker = annotation as? TomTomActualMarker,
-                   let id = marker.tag,
-                   let markerState = markerController?.getMarkerState(for: id) {
-                    markerController?.dispatchClick(state: markerState)
+                if let marker = annotation as? TomTomActualMarker, let id = marker.tag {
+                    if let markerState = markerController?.getMarkerState(for: id) {
+                        markerController?.dispatchClick(state: markerState)
+                    } else if let state = strategyManager.controller?.markerManager.getEntity(id)?.state {
+                        // クラスタリング等の strategy 描画マーカーは通常の markerController に
+                        // 居ない。ここで引き当てないと**クラスターのタップが黙って捨てられる**
+                        // （googlemaps / mapbox / maplibre 等と同じフォールバック）。
+                        strategyManager.controller?.dispatchClick(state)
+                    }
                 } else if let line = annotation as? TomTomActualPolyline {
                     polylineController?.dispatchClick(forTag: line.tag, at: coordinate)
                 } else if let polygon = annotation as? TomTomActualPolygon {
