@@ -1,4 +1,6 @@
-# MapConductor for TomTom (iOS)
+# TomTom SDK for MapConductor iOS
+
+## Description
 
 TomTom Orbis Maps provider for the MapConductor unified mapping API, built on
 [`TomTomSDKMapDisplay`](https://developer.tomtom.com/maps-sdk-ios/documentation).
@@ -27,6 +29,8 @@ This mirrors the Android `android-for-tomtom` module feature-for-feature:
   requests such as `@2x.png` are rendered at their requested pixel density.
 
 ## Setup
+
+https://mapconductor.com/setup/ios/tomtom/
 
 1. Get a TomTom Orbis Maps API key from the TomTom Developer Portal.
 2. Provide it either per-view (`TomTomMapView(state:, apiKey:)`) or via `Info.plist`:
@@ -62,7 +66,41 @@ TomTomMapView(state: state) {
 }
 ```
 
-## Files
+## Components
+
+### TomTomMapView [[docs]](https://mapconductor.com/mapview/)
+
+The SwiftUI map view is controlled through `TomTomMapViewState`.
+
+### Marker [[docs]](https://mapconductor.com/markers/)
+
+Supports custom icons, click events, in-place updates, and custom dragging.
+
+### InfoBubble [[docs]](https://mapconductor.com/info-bubble/)
+
+Displays SwiftUI content anchored to a selected marker.
+
+### Circle [[docs]](https://mapconductor.com/circle/)
+
+Renders circles through the unified MapConductor API.
+
+### Polyline [[docs]](https://mapconductor.com/polyline/)
+
+Renders native TomTom polylines.
+
+### Polygon [[docs]](https://mapconductor.com/polygon/)
+
+Renders native TomTom polygons.
+
+### Polygon Hole
+
+Polygon holes use the same unified shape data as the other iOS providers.
+
+### GroundImage [[docs]](https://mapconductor.com/ground-image/)
+
+Ground images use textured polygons. Raster tile layers are also supported.
+
+### Files
 
 | File | Role |
 | --- | --- |
@@ -79,6 +117,6 @@ TomTomMapView(state: state) {
 | `groundimage/` | Native textured-polygon GroundImage renderer and controller |
 | `raster/` | Raster layer synchronization and TomTom custom-style composition |
 
-## License
+### License
 
 Apache License 2.0
