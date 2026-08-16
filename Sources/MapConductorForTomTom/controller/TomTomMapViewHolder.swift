@@ -18,10 +18,6 @@ public final class TomTomMapViewHolder: MapViewHolderProtocol {
         map.pointForCoordinate(coordinate: position.toCoordinate())
     }
 
-    public func fromScreenOffset(offset: CGPoint) async -> GeoPoint? {
-        fromScreenOffsetSync(offset: offset)
-    }
-
     public func fromScreenOffsetSync(offset: CGPoint) -> GeoPoint? {
         map.coordinateForPoint(point: offset)?.toGeoPoint()
     }

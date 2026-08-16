@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import MapConductorCore
 import TomTomSDKMapDisplay
 
@@ -103,6 +104,37 @@ actor TomTomStyleComposer {
         }
     }
 
+    /// この SDK は宣言した `tileSize` より**大きくタイルを敷き、その倍率が画面倍率で変わる**。
+    ///
+    /// MapConductor の `tileSize` は「1 枚のタイルが覆うレイアウト単位（ポイント）」で、
+    /// MapLibre はそのとおりに敷く。同じスタイル JSON を渡しているのに、この SDK は
+    /// 粗いズームのタイルを取ってきて引き伸ばす。宣言をあらかじめ割っておくと揃う。
+    ///
+    /// 実測（地図ズーム 13、`tileSize` 512 の GeoJSON レイヤ。正しい要求は z=12）:
+    ///
+    /// | 画面 | 宣言 | 要求されるタイル z | 線の太さ（MapLibre 比） |
+    /// |---|---|---|---|
+    /// | 3x iPhone | 512 | 11 | 2.0 倍 |
+    /// | 3x iPhone | **256（÷2）** | **12** | **1.0 倍** |
+    /// | 2x iPad | 256（÷2） | 11 | 1.8 倍 |
+    /// | 2x iPad | **128（÷4）** | **12** | **1.0 倍** |
+    ///
+    /// つまり必要な除数は 3x で 2、2x で 4。エンジンの式は非公開なので、これは
+    /// **理屈ではなく較正**である。未知の倍率（1x など）は安全側の 2 に倒す
+    /// （粗い側にずれても表示は太くなるだけで、欠けはしない）。
+    ///
+    /// ベースの地図タイル（mc-base-raster、256）も同じ経路で割っている。ここを
+    /// 除外するとベースだけ倍の大きさで描かれてぼやける。
+    ///
+    /// **ここを外すと GeoJSON レイヤ・ヒートマップ・タイル方式マーカーが揃って
+    /// 太く・ぼやけて描かれる。** android-for-tomtom は別実装（TILE_SIZE_SCALE = 2 固定。
+    /// あちらは densityDpi の系で、実測 6px = MapLibre と一致済み）。
+    private static let tileSizeScale: Int = {
+        // 起動後 UIKit が使える前になることはない（compose は地図生成後にしか呼ばれない）。
+        let displayScale = Int(UIScreen.main.scale.rounded())
+        return displayScale <= 2 ? 4 : 2
+    }()
+
     private func rasterTileSource(
         template: String,
         tileSize: Int,
@@ -113,7 +145,7 @@ actor TomTomStyleComposer {
         var source: [String: Any] = [
             "type": "raster",
             "tiles": [template],
-            "tileSize": tileSize,
+            "tileSize": max(1, tileSize / Self.tileSizeScale),
         ]
         if let minZoom { source["minzoom"] = minZoom }
         if let maxZoom { source["maxzoom"] = maxZoom }
