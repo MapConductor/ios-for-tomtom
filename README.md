@@ -32,6 +32,8 @@ This mirrors the Android `android-for-tomtom` module feature-for-feature:
 
 https://mapconductor.com/setup/ios/tomtom/
 
+### API key
+
 1. Get a TomTom Orbis Maps API key from the TomTom Developer Portal.
 2. Provide it either per-view (`TomTomMapView(state:, apiKey:)`) or via `Info.plist`:
 
