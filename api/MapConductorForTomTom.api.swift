@@ -29,6 +29,7 @@ public struct TomTomMapDesign : MapConductorForTomTom.TomTomMapDesignTypeProtoco
   }
   public static let Standard: MapConductorForTomTom.TomTomMapDesign
   public static let Driving: MapConductorForTomTom.TomTomMapDesign
+  public static let None: MapConductorForTomTom.TomTomMapDesign
   public static let Satellite: MapConductorForTomTom.TomTomMapDesign
   public static func Create(id: Swift.String) -> MapConductorForTomTom.TomTomMapDesign
   public static func toMapDesignType(id: Swift.String) -> MapConductorForTomTom.TomTomMapDesignType

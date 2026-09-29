@@ -8,25 +8,46 @@ actor TomTomStyleComposer {
 
     private var cachedBaseStyles: [String: [String: Any]] = [:]
 
+    /// - Parameter withoutBasemap: for ``TomTomMapDesign/None``. The browsing
+    /// style stays the skeleton -- this SDK falls back to its default style
+    /// when handed one without its own layers (measured: a bare background
+    /// style put the default map back at world scale) -- but every layer of
+    /// it except the background is hidden, so no TomTom tile is fetched and
+    /// the raster layers sit on a background colour.
     func compose(
         apiKey: String,
         layers: [TomTomRasterSpec],
-        outputURL: URL
+        outputURL: URL,
+        withoutBasemap: Bool = false
     ) async throws -> StyleContainer {
         var root = try await baseStyle(apiKey: apiKey)
         var sources = root["sources"] as? [String: Any] ?? [:]
         var styleLayers = root["layers"] as? [[String: Any]] ?? []
 
-        sources["mc-base-raster"] = rasterTileSource(
-            template: baseRasterTemplate(apiKey: apiKey),
-            tileSize: 256,
-            minZoom: nil,
-            maxZoom: nil,
-            scheme: .XYZ
-        )
-        let baseLayer = rasterLayer(id: "mc-base-raster-layer", source: "mc-base-raster", opacity: 1)
-        let baseIndex = styleLayers.first?["type"] as? String == "background" ? 1 : 0
-        styleLayers.insert(baseLayer, at: min(baseIndex, styleLayers.count))
+        if withoutBasemap {
+            styleLayers = styleLayers.map { layer in
+                var layer = layer
+                if layer["type"] as? String == "background" {
+                    layer["paint"] = ["background-color": BlankMapStyle.backgroundColor]
+                } else {
+                    var layout = layer["layout"] as? [String: Any] ?? [:]
+                    layout["visibility"] = "none"
+                    layer["layout"] = layout
+                }
+                return layer
+            }
+        } else {
+            sources["mc-base-raster"] = rasterTileSource(
+                template: baseRasterTemplate(apiKey: apiKey),
+                tileSize: 256,
+                minZoom: nil,
+                maxZoom: nil,
+                scheme: .XYZ
+            )
+            let baseLayer = rasterLayer(id: "mc-base-raster-layer", source: "mc-base-raster", opacity: 1)
+            let baseIndex = styleLayers.first?["type"] as? String == "background" ? 1 : 0
+            styleLayers.insert(baseLayer, at: min(baseIndex, styleLayers.count))
+        }
 
         for (index, spec) in layers.enumerated() {
             let sourceId = "mc-raster-src-\(index)"

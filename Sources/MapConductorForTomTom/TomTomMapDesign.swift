@@ -24,6 +24,7 @@ public struct TomTomMapDesign: TomTomMapDesignTypeProtocol, Hashable {
     /// The TomTom style container to load for this design.
     public var styleContainer: StyleContainer {
         switch id {
+        case Self.None.id: return StyleContainer(mainStyle: .custom(style: BlankMapStyle.fileURL))
         case Self.Standard.id: return .defaultStyle
         case Self.Driving.id: return .drivingStyle
         case Self.Satellite.id: return .satelliteStyle
@@ -31,6 +32,8 @@ public struct TomTomMapDesign: TomTomMapDesignTypeProtocol, Hashable {
         }
     }
 
+    /// No basemap: a background colour and nothing else.
+    public static let None = TomTomMapDesign(id: "none")
     /// Default (browsing) style.
     public static let Standard = TomTomMapDesign(id: "standard")
     /// Navigation-oriented style.
@@ -40,6 +43,7 @@ public struct TomTomMapDesign: TomTomMapDesignTypeProtocol, Hashable {
 
     public static func Create(id: String) -> TomTomMapDesign {
         switch id {
+        case None.id: return None
         case Standard.id: return Standard
         case Driving.id: return Driving
         case Satellite.id: return Satellite
