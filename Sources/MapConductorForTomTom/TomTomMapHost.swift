@@ -76,7 +76,7 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         self.mapView = mapView
 
         mapView.getMapAsync { [weak self] map in
-            guard let self else { return }
+            guard let self, self.mapView === mapView else { return }
             self.onMapReady(mapView: mapView, map: map, apiKey: resolvedApiKey)
             self.applyCameraRestriction(cameraRestriction)
             self.updateContent(content)
@@ -118,6 +118,18 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
 
     private var cameraMoving = false
     private var appliedDesignId: String?
+    private var isMapReady = false
+    private var pendingStyle: MapViewStyle?
+    private var pendingStyleDiagnostics: (([String]) -> Void)?
+
+    /// Keep the latest SwiftUI style until the asynchronous map creation has
+    /// registered the raster controller that the style needs to mount its tiles.
+    func updateStyle(_ style: MapViewStyle?, onDiagnostics: (([String]) -> Void)?) {
+        pendingStyle = style
+        pendingStyleDiagnostics = onDiagnostics
+        guard isMapReady else { return }
+        applyStyle(style, onDiagnostics: onDiagnostics)
+    }
 
     // Custom drag state (TomTom has no native marker drag).
     private var dragRecognizer: MarkerDragGestureRecognizer?
@@ -249,6 +261,8 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         recognizer.shouldBeginAt = { [weak self] point in self?.dragShouldBegin(at: point) ?? false }
         mapView.addGestureRecognizer(recognizer)
         self.dragRecognizer = recognizer
+        isMapReady = true
+        applyStyle(pendingStyle, onDiagnostics: pendingStyleDiagnostics)
     }
 
     public func applyDesign(_ design: TomTomMapDesignType) {
@@ -439,6 +453,9 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
     }
 
     public func unbind() {
+        isMapReady = false
+        pendingStyle = nil
+        pendingStyleDiagnostics = nil
         // 登録した capability を取り下げる。レジストリの持ち主は state で、ビューより長生きするため、
         // ここで外さないと破棄済みのコントローラを掴んだまま残る。
         state.serviceRegistry.removeProviderRegistrations()
