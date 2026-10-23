@@ -27,21 +27,27 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
     /// 許容量が 2〜3 倍に膨らんでいた。Android が dp × density としているのは、あちらの画面座標が
     /// px だから。iOS のポイントは既に dp 相当なので倍率は掛けない。
     override func find(position: GeoPointProtocol) -> MarkerEntity<TomTomActualMarker>? {
-        guard let nearest = markerManager.findNearest(position: position) else { return nil }
         // The base `find` is nonisolated; our drag hit-test always runs on the main thread
         // (invoked from the gesture handler), so assume main-actor isolation to touch `map`.
         return MainActor.assumeIsolated {
             guard let map,
-                  let touchPoint = map.pointForCoordinate(coordinate: position.toCoordinate()),
-                  let markerPoint = map.pointForCoordinate(coordinate: nearest.state.position.toCoordinate())
+                  let touchPoint = map.pointForCoordinate(coordinate: position.toCoordinate())
             else {
                 return nil
             }
-            return MarkerHitTest.hitsIcon(
+            // タップ点の周りを候補にし、指の下にアイコン（ラベル込み）があるものを優先する。
+            let project: (GeoPointProtocol) -> CGPoint? = { map.pointForCoordinate(coordinate: $0.toCoordinate()) }
+            guard let bounds = MarkerHitTest.searchBounds(
+                position: position,
                 touchScreen: touchPoint,
-                markerScreen: markerPoint,
-                state: nearest.state
-            ) ? nearest : nil
+                project: project
+            ) else { return nil }
+            return MarkerHitTest.pick(
+                touchScreen: touchPoint,
+                candidates: markerManager.findMarkersInBounds(bounds),
+                state: { $0.state },
+                project: project
+            )
         }
     }
 
