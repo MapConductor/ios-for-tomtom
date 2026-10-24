@@ -7,7 +7,7 @@
 # (`s.ios.dependency`) and must be re-checked when VER changes — 0.47 → 0.73 added
 # MapTileStoreCommon / Telemetry / ElasticDataProviderInternal / Route / RoutingCommon.
 set -euo pipefail
-VER="${1:-0.73.1}"
+VER="${1:-0.74.0}"
 BASE="https://repositories.tomtom.com/artifactory/cocoapods"
 DIR="$(cd "$(dirname "$0")/.." && pwd)/Frameworks"
 mkdir -p "$DIR" && cd "$DIR"

@@ -31,9 +31,19 @@ final class TomTomRasterLayerController:
         }
     }
 
+    private var isWithoutBasemap: Bool { fallbackDesign.id == TomTomMapDesign.None.id }
+
     func updateDesign(_ design: TomTomMapDesign) {
+        let hadBasemap = !isWithoutBasemap
         fallbackDesign = design
-        if !isUsingComposedStyle {
+        if isUsingComposedStyle || isWithoutBasemap {
+            // The composed style is built on the basemap or on nothing, and
+            // "nothing" is itself a composed style (see the composer), so a
+            // change on either side means composing again.
+            if hadBasemap != !isWithoutBasemap || !isUsingComposedStyle {
+                scheduleStyleUpdate(specs: renderer.allSpecs())
+            }
+        } else {
             map?.styleContainer = design.styleContainer
         }
     }
@@ -53,7 +63,7 @@ final class TomTomRasterLayerController:
 
     private func applyStyle(specs: [TomTomRasterSpec]) async {
         guard let map else { return }
-        guard !specs.isEmpty else {
+        guard !specs.isEmpty || isWithoutBasemap else {
             map.styleContainer = fallbackDesign.styleContainer
             return
         }
@@ -69,7 +79,8 @@ final class TomTomRasterLayerController:
             let style = try await TomTomStyleComposer.shared.compose(
                 apiKey: apiKey,
                 layers: specs,
-                outputURL: outputURL
+                outputURL: outputURL,
+                withoutBasemap: isWithoutBasemap
             )
             guard !Task.isCancelled else { return }
             map.styleContainer = style
@@ -77,6 +88,7 @@ final class TomTomRasterLayerController:
             NSLog("[MapConductor] Failed to compose TomTom raster style: %@", String(describing: error))
         }
     }
+
 
     func unbind() {
         styleTask?.cancel()
