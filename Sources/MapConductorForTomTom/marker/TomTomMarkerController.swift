@@ -4,13 +4,35 @@ import CoreGraphics
 import TomTomSDKMapDisplay
 import UIKit
 
-/// Core + markers scope: a straightforward native-marker controller (no tile rendering).
+/// TomTom 用マーカーコントローラ。
+///
+/// 他プロバイダと同じく、`minMarkerCount` 以上の静的マーカーは ``MarkerTileRenderer`` で
+/// PNG タイルに描き、ローカルタイルサーバ経由のラスター層として載せる。数万本の
+/// ネイティブマーカーを常駐させない。ドラッグ可能なものとアニメーション付きのものは
+/// ネイティブのマーカーで描く（ドラッグはネイティブのマーカーを直接動かすため）。
+///
+/// TomTom SDK には実行時に層を足す API が無いので、層の実体化は地図ホストに任せる。
+/// ``markerTileRasterLayerCallback`` で受けた ``RasterLayerState`` を content のラスター層に
+/// 合流させ、``TomTomRasterLayerController`` がスタイルを組み直す。android-for-tomtom と同じ形。
 @MainActor
 final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker, TomTomMarkerRenderer> {
     private weak var map: TomTomMap?
 
     private var markerStatesById: [String: MarkerState] = [:]
     private var markerSubscriptions: [String: AnyCancellable] = [:]
+
+    // MARK: - Marker tiling
+
+    var tilingOptions: MarkerTilingOptions = .Default
+    /// タイル層が変わったときに呼ぶ。nil は層を外す。
+    var markerTileRasterLayerCallback: ((RasterLayerState?) -> Void)?
+    private var tileRenderer: MarkerTileRenderer<TomTomActualMarker>?
+    private var tileRouteId: String?
+    /// タイル URL の版。マーカーが変わるたびに上げ、地図に描画済みのタイルを取り直させる。
+    private var tileVersion: Int64 = 0
+    private var tiledMarkerIds: Set<String> = []
+    private var tileRefreshScheduled = false
+    private let defaultMarkerIconForTiling: BitmapIcon = DefaultMarkerIcon().toBitmapIcon()
 
     init(map: TomTomMap?) {
         self.map = map
@@ -49,6 +71,121 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
                 project: project
             )
         }
+    }
+
+    override func add(data: [MarkerState]) async {
+        guard tilingOptions.enabled else {
+            await super.add(data: data)
+            return
+        }
+        if tileRenderer == nil { setupTileRenderer() }
+
+        let shouldTileAll = data.count >= tilingOptions.minMarkerCount
+        var localTiledMarkerIds = tiledMarkerIds
+        let result = await MarkerIngestionEngine.ingest(
+            data: data,
+            markerManager: markerManager,
+            renderer: renderer,
+            defaultMarkerIcon: defaultMarkerIconForTiling,
+            tilingEnabled: tilingOptions.enabled,
+            tiledMarkerIds: &localTiledMarkerIds,
+            // ドラッグはネイティブのマーカーを指で動かすので、タイルには入れない。
+            shouldTile: { [shouldTileAll] state in
+                shouldTileAll && !state.draggable && state.getAnimation() == nil
+            }
+        )
+        tiledMarkerIds = localTiledMarkerIds
+
+        if result.tiledDataChanged, let tileRenderer {
+            tileRenderer.invalidate()
+            tileVersion += 1
+            updateTileLayer(hasTiledMarkers: result.hasTiledMarkers)
+        }
+    }
+
+    /// タイル担当のマーカーが変わったら、タイルを描き直させる。
+    ///
+    /// タイル担当のマーカーはネイティブのマーカーを持たないので、基底の `update` は
+    /// 管理表を書き換えるだけで地図には何も届かない。
+    override func update(state: MarkerState) async {
+        await super.update(state: state)
+        guard tiledMarkerIds.contains(state.id) else { return }
+        scheduleTileRefresh()
+    }
+
+    /// 描き直しは 1 回にまとめる。TomTom では層を変えるたびにスタイルを組み直すので、
+    /// 数百本が続けて変わったときに 1 本ごとに走らせるわけにはいかない。
+    private func scheduleTileRefresh() {
+        guard !tileRefreshScheduled else { return }
+        tileRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.tileRefreshScheduled = false
+            guard let tileRenderer = self.tileRenderer else { return }
+            tileRenderer.invalidate()
+            self.tileVersion += 1
+            self.updateTileLayer(hasTiledMarkers: !self.tiledMarkerIds.isEmpty)
+        }
+    }
+
+    private static var retinaAwareTileSize: Int {
+        256 * max(1, Int(UIScreen.main.scale))
+    }
+
+    private func setupTileRenderer() {
+        let routeId = "mapconductor-tomtom-markers-\(UUID().uuidString)"
+        let contentScale = Double(UIScreen.main.scale)
+        let baseCallback = tilingOptions.iconScaleCallback
+        let scaledCallback: ((MarkerState, Int) -> Double)? = { state, zoom in
+            (baseCallback?(state, zoom) ?? 1.0) * contentScale
+        }
+        let renderer = MarkerTileRenderer<TomTomActualMarker>(
+            markerManager: markerManager,
+            tileSize: Self.retinaAwareTileSize,
+            cacheSizeBytes: tilingOptions.cacheSize,
+            debugTileOverlay: tilingOptions.debugTileOverlay,
+            iconScaleCallback: scaledCallback,
+            declutterPx: tilingOptions.declutterPx
+        )
+        TileServerRegistry.get().register(routeId: routeId, provider: renderer)
+        tileRenderer = renderer
+        tileRouteId = routeId
+    }
+
+    private func updateTileLayer(hasTiledMarkers: Bool) {
+        guard hasTiledMarkers, let routeId = tileRouteId, let tileRenderer else {
+            markerTileRasterLayerCallback?(nil)
+            return
+        }
+        // 版は URL に入れる。同じ URL のままだと地図は描画済みのタイルを取り直さない。
+        let urlTemplate = TileServerRegistry.get().urlTemplate(
+            routeId: routeId,
+            tileSize: tileRenderer.tileSize,
+            cacheKey: "v\(tileVersion)"
+        )
+        // 層の tileSize は画面上の大きさ（pt）。タイルは 1 枚 256pt を画面倍率の画素で焼く。
+        markerTileRasterLayerCallback?(RasterLayerState(
+            source: .urlTemplate(template: urlTemplate, tileSize: 256),
+            id: "marker-tile-\(routeId)"
+        ))
+    }
+
+    /// タイル担当のマーカーのタップ判定。`screenPoint` は地図ビューのポイント座標。
+    ///
+    /// タイルのマーカーは annotation ではないので `.tappedOnAnnotation` には来ない。
+    /// 地図のタップ（`.tapped`）からここを通して拾う。
+    func handleTiledMarkerTap(at screenPoint: CGPoint, zoom: Double) -> Bool {
+        guard !tiledMarkerIds.isEmpty, let map, let tileRenderer else { return false }
+        let state = tileRenderer.hitTest(
+            screenPoint: screenPoint,
+            markerIds: tiledMarkerIds,
+            zoom: Int(zoom.rounded()),
+            unproject: { point in map.coordinateForPoint(point: point)?.toGeoPoint() },
+            project: { point in map.pointForCoordinate(coordinate: point.toCoordinate()) }
+        )
+        guard let state else { return false }
+        dispatchClick(state: state)
+        return true
     }
 
     func getMarkerState(for id: String) -> MarkerState? {
@@ -115,6 +252,13 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
     }
 
     func unbind() {
+        if let routeId = tileRouteId {
+            TileServerRegistry.get().unregister(routeId: routeId)
+        }
+        tileRenderer = nil
+        tileRouteId = nil
+        tiledMarkerIds.removeAll()
+        markerTileRasterLayerCallback = nil
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()
         markerStatesById.removeAll()
