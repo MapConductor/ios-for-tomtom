@@ -114,6 +114,10 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
     private var groundImageController: TomTomGroundImageController?
     private var rasterController: TomTomRasterLayerController?
     private var overlayScope: MapOverlayScope?
+    /// タイル方式マーカーのラスター層。content のラスター層に合流させて流す。
+    private var markerTileRasterLayer: RasterLayerState?
+    /// 直近の content のラスター層。マーカーのタイル層だけが変わったときに合流し直すため。
+    private var contentRasterLayers: [RasterLayerState] = []
     private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
 
     private var cameraMoving = false
@@ -225,6 +229,14 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         bindOverlayCollector(overlayScope.rasterLayerCollector, to: rasterController)
         bindOverlayCollector(overlayScope.groundImageCollector, to: groundImageController)
 
+        // マーカーのタイル層はマーカーが変わるたびに作り直される。content の同期を
+        // 待たずにここで流さないと、次に画面が描き直されるまで古いタイルのまま残る。
+        markerController.markerTileRasterLayerCallback = { [weak self] state in
+            guard let self else { return }
+            self.markerTileRasterLayer = state
+            self.syncRasterLayers()
+        }
+
         // 円は radius 変更のたびに polygon を作り直して最前面へ来るため、
         // 描画後にポリラインを最前面へ戻す（TomTom は z-index 未対応で描画順＝追加順）。
         self.circleController?.renderer.onAfterRender = { [weak self] in
@@ -280,13 +292,21 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
 
     public func updateContent(_ content: MapViewContent) {
         infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
+        markerController?.tilingOptions = content.markerTilingOptions
         markerController?.syncMarkers(content.markers)
         overlayScope?.circleCollector.sync(content.circles.map { $0.state })
         overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
-        overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
+        contentRasterLayers = content.rasterLayers.map { $0.state }
+        syncRasterLayers()
         overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
         infoBubbleCoordinator?.updateAllLayouts()
+    }
+
+    /// content のラスター層に、タイル方式マーカーの層を合流させて流す。
+    private func syncRasterLayers() {
+        let tileLayer = markerTileRasterLayer.map { [$0] } ?? []
+        overlayScope?.rasterLayerCollector.sync(contentRasterLayers + tileLayer)
     }
 
     // MARK: - MapDelegate
@@ -305,6 +325,15 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             //
             // 他プロバイダのように重複したカスケードを持っているわけではないので、
             // 畳む対象が無い。android-for-tomtom も同じ判断（1-18 の nativeFirst）。
+            //
+            // ただしタイル方式のマーカーは annotation ではないので、ここで拾う。
+            if let screenPoint = map.pointForCoordinate(coordinate: coordinate),
+               markerController?.handleTiledMarkerTap(
+                   at: screenPoint,
+                   zoom: lastCameraPosition?.zoom ?? 0
+               ) == true {
+                break
+            }
             let point = coordinate.toGeoPoint()
             controller?.notifyMapClick(point)
             onMapClick?(point)
