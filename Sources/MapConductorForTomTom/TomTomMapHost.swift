@@ -347,6 +347,14 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
                 break
             }
             let point = coordinate.toGeoPoint()
+            // Polygons drawn in tiles are not annotations either. They are
+            // looked up by shape, as the other providers do; only tiled ones,
+            // so a native polygon keeps the annotation path above.
+            if let polygonController, let tiler = polygonController.tiler,
+               let hit = polygonController.find(position: point), tiler.isTiled(hit.state.id) {
+                polygonController.dispatchClick(event: PolygonEvent(state: hit.state, clicked: point))
+                break
+            }
             controller?.notifyMapClick(point)
             onMapClick?(point)
         case let .tappedOnAnnotation(annotation, coordinate):
