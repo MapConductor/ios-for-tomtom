@@ -1,6 +1,6 @@
 import Combine
 import CoreLocation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import SwiftUI
 import TomTomSDKMapDisplay
 import UIKit
@@ -208,6 +208,17 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             fallbackDesign: (state.mapDesignType as? TomTomMapDesign) ?? .Standard
         )
         self.rasterController = rasterController
+        // Many polygons are drawn into raster tiles and shown as one raster
+        // layer; taps still resolve against the original shapes.
+        let polygonTiler = PolygonTiler()
+        polygonTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolygonTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolygonTiler.layerId)
+            }
+        }
+        polygonController.tiler = polygonTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -297,6 +308,7 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         overlayScope?.circleCollector.sync(content.circles.map { $0.state })
         overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
+        polygonController?.tiler?.refreshIfServerMoved()
         contentRasterLayers = content.rasterLayers.map { $0.state }
         syncRasterLayers()
         overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
