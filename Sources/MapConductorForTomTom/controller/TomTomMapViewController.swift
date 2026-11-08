@@ -45,8 +45,12 @@ final class TomTomMapViewController: MapViewControllerProtocol {
         self.holder = AnyMapViewHolder(typedHolder)
     }
 
+    /// ``clearOverlays()`` の中身。オーバーレイのコントローラはホストが持っているので、
+    /// ホストが生成時に設定する（android-sdk と同じく、各コントローラの `clear()` を呼ぶ）。
+    var clearOverlaysHandler: (@MainActor () async -> Void)?
+
     func clearOverlays() async {
-        map?.removeAnnotations()
+        await clearOverlaysHandler?()
     }
 
     func setCameraMoveStartListener(listener: OnCameraMoveHandler?) { cameraMoveStartListener = listener }
