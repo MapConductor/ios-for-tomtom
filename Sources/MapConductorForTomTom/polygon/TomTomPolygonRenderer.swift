@@ -41,8 +41,9 @@ final class TomTomPolygonRenderer: AbstractPolygonOverlayRenderer<TomTomActualPo
     /// 非 geodesic は補間せず生の頂点を使う（android-for-tomtom と同じ。世界マスク級の
     /// リングを線形補間すると過密になり TomTom の描画が失敗するため）。
     private func interpolatedGeo(_ points: [GeoPointProtocol], geodesic: Bool) -> [GeoPointProtocol] {
+        // geodesic は閉じる辺（末尾 → 先頭）も大圏で補間する（塗りと輪郭が同じネイティブポリゴン）。
         let geo = geodesic
-            ? WGS84Geodesic.createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
+            ? densifyGeodesicRing(points, maxSegmentLength: maxSegmentLengthMeters())
             : points
         guard let first = geo.first, let last = geo.last else { return geo }
         if geo.count >= 2, first.latitude == last.latitude, first.longitude == last.longitude {
