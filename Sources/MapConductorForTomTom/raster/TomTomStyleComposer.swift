@@ -1,5 +1,5 @@
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import TomTomSDKMapDisplay
 
 actor TomTomStyleComposer {
@@ -52,18 +52,26 @@ actor TomTomStyleComposer {
         // 一番上に積むと、SDK が描くポリゴン・ポリライン・サークル・グラウンドイメージ
         // （アノテーション）まで覆っていた（帯の順: ラスター < グラウンドイメージ < ポリゴン …）。
         // GL 系の他プロバイダと同じく、ラスターはラベルの下・ベースマップの地物の上になる。
+        //
+        // SDK 自身のタイル（ポリゴン・ポリライン・マーカーのタイル）はラスターの帯ではなく
+        // それぞれの帯なので、スタイルの一番上に積む（`layers` は帯の順に並んでいる）。
+        // TomTom のスタイルは最初の symbol の後ろにも道路のレイヤが続くため、ラベルの前に
+        // 入れるとポリラインのタイルが地図の道路に覆われて見えなかった。アノテーションは
+        // スタイルより上に描かれるので、ネイティブのポリライン等はこれらより上のまま。
         var insertAt = Self.firstLabelIndex(styleLayers) ?? styleLayers.count
         for (index, spec) in layers.enumerated() {
             let sourceId = "mc-raster-src-\(index)"
             sources[sourceId] = rasterSource(spec.source)
-            styleLayers.insert(
-                rasterLayer(
-                    id: "mc-raster-layer-\(index)-\(styleIdentifier(spec.id))",
-                    source: sourceId,
-                    opacity: spec.opacity
-                ),
-                at: insertAt
+            let layer = rasterLayer(
+                id: "mc-raster-layer-\(index)-\(styleIdentifier(spec.id))",
+                source: sourceId,
+                opacity: spec.opacity
             )
+            if OverlayStacking.rasterKey(stateId: spec.id, zIndex: spec.zIndex).band != .rasterLayer {
+                styleLayers.append(layer)
+                continue
+            }
+            styleLayers.insert(layer, at: insertAt)
             insertAt += 1
         }
 

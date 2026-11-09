@@ -219,6 +219,17 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             }
         }
         polygonController.tiler = polygonTiler
+        // Many polylines likewise, in their own raster layer in the polyline band
+        // (under the natively drawn polylines); taps still resolve against the original lines.
+        let polylineTiler = PolylineTiler()
+        polylineTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolylineTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolylineTiler.layerId)
+            }
+        }
+        polylineController.tiler = polylineTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -310,6 +321,8 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
         polygonController?.tiler?.refreshIfServerMoved()
+        if polylineController?.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+        polylineController?.tiler?.refreshIfServerMoved()
         contentRasterLayers = content.rasterLayers.map { $0.state }
         syncRasterLayers()
         overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
@@ -348,6 +361,14 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
                 break
             }
             let point = coordinate.toGeoPoint()
+            // Polylines drawn in tiles are not annotations either (and sit above
+            // the polygons): looked up by shape, delivered at the closest point
+            // on the line, as the other providers do.
+            if let polylineController, let tiler = polylineController.tiler,
+               let hit = polylineController.findWithClosestPoint(position: point), tiler.isTiled(hit.entity.state.id) {
+                polylineController.dispatchClick(event: PolylineEvent(state: hit.entity.state, clicked: hit.closestPoint))
+                break
+            }
             // Polygons drawn in tiles are not annotations either. They are
             // looked up by shape, as the other providers do; only tiled ones,
             // so a native polygon keeps the annotation path above.

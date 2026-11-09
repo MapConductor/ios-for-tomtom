@@ -1,4 +1,4 @@
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 @MainActor
 final class TomTomRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer<TomTomRasterLayer> {
@@ -51,10 +51,18 @@ final class TomTomRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
         )
     }
 
+    /// The raster layers in the style, bottom first. The SDK's own tile layers
+    /// (polygon, polyline and marker tiles) take their overlay band
+    /// (``OverlayStacking/rasterKey(stateId:zIndex:)``): the app's rasters, then
+    /// polygon tiles, then polyline tiles, then marker tiles. TomTom draws its
+    /// annotations (native polygons, circles, polylines) above every style layer,
+    /// so these only order the layers among themselves.
     private func orderedSpecs() -> [TomTomRasterSpec] {
         specs.values.sorted {
-            if $0.zIndex == $1.zIndex { return $0.id < $1.id }
-            return $0.zIndex < $1.zIndex
+            let a = OverlayStacking.rasterKey(stateId: $0.id, zIndex: $0.zIndex)
+            let b = OverlayStacking.rasterKey(stateId: $1.id, zIndex: $1.zIndex)
+            if a == b { return $0.id < $1.id }
+            return a < b
         }
     }
 
