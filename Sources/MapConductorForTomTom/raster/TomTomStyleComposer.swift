@@ -48,16 +48,23 @@ actor TomTomStyleComposer {
             styleLayers.insert(baseLayer, at: min(baseIndex, styleLayers.count))
         }
 
+        // ラスターはスタイルの一番上ではなく、ベースマップの最初のラベル（symbol）の直前に入れる。
+        // 一番上に積むと、SDK が描くポリゴン・ポリライン・サークル・グラウンドイメージ
+        // （アノテーション）まで覆っていた（帯の順: ラスター < グラウンドイメージ < ポリゴン …）。
+        // GL 系の他プロバイダと同じく、ラスターはラベルの下・ベースマップの地物の上になる。
+        var insertAt = Self.firstLabelIndex(styleLayers) ?? styleLayers.count
         for (index, spec) in layers.enumerated() {
             let sourceId = "mc-raster-src-\(index)"
             sources[sourceId] = rasterSource(spec.source)
-            styleLayers.append(
+            styleLayers.insert(
                 rasterLayer(
                     id: "mc-raster-layer-\(index)-\(styleIdentifier(spec.id))",
                     source: sourceId,
                     opacity: spec.opacity
-                )
+                ),
+                at: insertAt
             )
+            insertAt += 1
         }
 
         root["sources"] = sources
@@ -65,6 +72,11 @@ actor TomTomStyleComposer {
         let data = try JSONSerialization.data(withJSONObject: root, options: [])
         try data.write(to: outputURL, options: .atomic)
         return StyleContainer(mainStyle: .custom(style: outputURL))
+    }
+
+    /// ベースマップの最初のラベル（symbol レイヤ）の位置。
+    static func firstLabelIndex(_ styleLayers: [[String: Any]]) -> Int? {
+        styleLayers.firstIndex { $0["type"] as? String == "symbol" }
     }
 
     /// The browsing style's skeleton.

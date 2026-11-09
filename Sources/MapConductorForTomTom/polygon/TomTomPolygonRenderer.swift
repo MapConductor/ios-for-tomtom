@@ -37,13 +37,19 @@ final class TomTomPolygonRenderer: AbstractPolygonOverlayRenderer<TomTomActualPo
         return min(metersPerPixel * 64.0, 200_000.0)
     }
 
-    /// 補間済み（geodesic 時のみ）の開いたリングを core GeoPoint 列で返す。
-    /// 非 geodesic は補間せず生の頂点を使う（android-for-tomtom と同じ。世界マスク級の
-    /// リングを線形補間すると過密になり TomTom の描画が失敗するため）。
+    /// 補間済みの開いたリングを core GeoPoint 列で返す。閉じる辺（末尾 → 先頭）も含めて補間する
+    /// （塗りと輪郭が同じネイティブポリゴン）。geodesic は大圏、geodesic=false は緯度経度の線形補間
+    /// （ポリラインの false と同じ線）。
+    ///
+    /// 線形補間は 200 km 刻みと粗くする（android-for-tomtom と同じ）。世界マスク級のリングを 10 km 刻みで
+    /// 補間すると過密になり TomTom の描画が失敗する（以前はこのため false を補間していなかった）。
+    /// 緯度経度の直線は 200 km 刻みでもメルカトル上の曲がりを十分に表せる。
     private func interpolatedGeo(_ points: [GeoPointProtocol], geodesic: Bool) -> [GeoPointProtocol] {
-        let geo = geodesic
-            ? WGS84Geodesic.createInterpolatePoints(points, maxSegmentLength: maxSegmentLengthMeters())
-            : points
+        let geo = densifyPolygonRing(
+            points,
+            geodesic: geodesic,
+            maxSegmentLength: geodesic ? maxSegmentLengthMeters() : 200_000.0
+        )
         guard let first = geo.first, let last = geo.last else { return geo }
         if geo.count >= 2, first.latitude == last.latitude, first.longitude == last.longitude {
             return Array(geo.dropLast())
