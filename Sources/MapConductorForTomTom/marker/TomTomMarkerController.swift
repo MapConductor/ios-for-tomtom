@@ -89,6 +89,7 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
             defaultMarkerIcon: defaultMarkerIconForTiling,
             tilingEnabled: tilingOptions.enabled,
             tiledMarkerIds: &localTiledMarkerIds,
+            addedTracker: addedTracker,
             // ドラッグはネイティブのマーカーを指で動かすので、タイルには入れない。
             shouldTile: { [shouldTileAll] state in
                 shouldTileAll && !state.draggable && state.getAnimation() == nil
@@ -101,6 +102,9 @@ final class TomTomMarkerController: AbstractMarkerController<TomTomActualMarker,
             tileVersion += 1
             updateTileLayer(hasTiledMarkers: result.hasTiledMarkers)
         }
+
+        // The newly tiled markers are on the map once their tile layer is.
+        await addedTracker.admitAndNotify(result.tiledAdded)
     }
 
     /// タイル担当のマーカーが変わったら、タイルを描き直させる。
