@@ -230,6 +230,15 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             }
         }
         polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -322,7 +331,9 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
         polygonController?.tiler?.refreshIfServerMoved()
         if polylineController?.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+        if circleController?.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
         polylineController?.tiler?.refreshIfServerMoved()
+        circleController?.tiler?.refreshIfServerMoved()
         contentRasterLayers = content.rasterLayers.map { $0.state }
         syncRasterLayers()
         overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
