@@ -1,6 +1,12 @@
 import CoreLocation
 import Foundation
 @_spi(MapConductorDriver) import MapConductorCore
+
+/// TomTom（iOS）のカメラの縦の視野角（度）。
+///
+/// SDK は値を公開していない。iPad Pro 11 で、傾けた地図の中心と北の地点の画面位置から
+/// 焦点距離を求めて実測した値。
+let tomTomVerticalFieldOfView: Double = 45.0
 import TomTomSDKMapDisplay
 
 private let converter = TomTomZoomAltitudeConverter()

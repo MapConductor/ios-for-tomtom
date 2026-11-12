@@ -31,6 +31,9 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     /// カメラ状態の読み戻し時に元の負tilt を復元するヒントとして保持する
     /// （android-for-tomtom の `lastLogicalCameraPosition` / MapLibre と同方針）。
     private(set) var lastLogicalTilt: Double?
+    /// 直近の移動で要求されたパディング。TomTom のカメラには使えるパディングが無いので、中心を
+    /// ずらして再現し（``CameraPaddingEmulation``）、読み戻しで逆にずらすときに使う。
+    private(set) var lastPaddings: MapPaddingsProtocol?
 
     /// 初期カメラ（MapOptions 経由で適用され `moveCamera` を通らない）の論理 tilt を記録する。
     func seedLogicalTilt(_ tilt: Double) {
@@ -60,17 +63,40 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     func setMapLongClickListener(listener: OnMapEventHandler?) { mapLongClickListener = listener }
     func setMapInitializedListener(listener: OnMapInitializedHandler?) { mapInitializedListener = listener }
 
-    func moveCamera(position: MapCameraPosition) {
+    func moveCamera(position requested: MapCameraPosition) {
+        lastPaddings = requested.paddings
+        let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
         map?.moveCamera(position.toCameraUpdate())
     }
 
-    func animateCamera(position: MapCameraPosition, duration: Long) {
+    func animateCamera(position requested: MapCameraPosition, duration: Long) {
+        lastPaddings = requested.paddings
+        let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
         map?.applyCamera(
             position.toCameraUpdate(),
             animationDuration: TimeInterval(duration) / 1000.0,
             completion: nil
+        )
+    }
+
+    /// TomTom へ渡すカメラ。パディングの分だけ中心をずらす。
+    private func paddingApplied(_ position: MapCameraPosition) -> MapCameraPosition {
+        CameraPaddingEmulation.applied(
+            to: position,
+            fov: tomTomVerticalFieldOfView,
+            viewportSize: mapView?.bounds.size ?? .zero
+        )
+    }
+
+    /// TomTom から読み戻したカメラ（画面中心）を、ターゲット・パディング・視野角を持つカメラへ戻す。
+    func reportedCamera(_ camera: MapCameraPosition) -> MapCameraPosition {
+        CameraPaddingEmulation.restored(
+            camera,
+            paddings: lastPaddings,
+            fov: tomTomVerticalFieldOfView,
+            viewportSize: mapView?.bounds.size ?? .zero
         )
     }
 
