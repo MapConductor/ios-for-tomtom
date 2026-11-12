@@ -67,8 +67,10 @@ final class TomTomMapViewController: MapViewControllerProtocol {
         lastPaddings = requested.paddings
         let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
-        map?.moveCamera(position.toCameraUpdate())
-        correctPaddedTarget(requested)
+        // カメラの反映は非同期なので、反映し終わってから投影で測って詰める。
+        map?.applyCamera(position.toCameraUpdate(), animationDuration: 0) { [weak self] _ in
+            self?.correctPaddedTarget(requested)
+        }
     }
 
     func animateCamera(position requested: MapCameraPosition, duration: Long) {
@@ -108,20 +110,23 @@ final class TomTomMapViewController: MapViewControllerProtocol {
 
     /// 計算で置いた中心だと、TomTom の縮尺や tilt の上限でターゲットがずれる。地図の投影で
     /// 実際の位置を測り、パディングの残りの中央に来るまで中心だけを動かし直す。
-    private func correctPaddedTarget(_ requested: MapCameraPosition) {
-        guard let map, let mapView else { return }
-        let size = mapView.bounds.size
-        for _ in 0..<3 {
-            guard let center = CameraPaddingEmulation.correctedCenter(
-                target: requested.position,
-                paddings: requested.paddings,
-                viewportSize: size,
-                project: { point in
-                    map.pointForCoordinate(coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude))
-                },
-                unproject: { point in map.coordinateForPoint(point: point)?.toGeoPoint() }
-            ) else { return }
-            map.moveCamera(CameraUpdate(position: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude)))
+    private func correctPaddedTarget(_ requested: MapCameraPosition, remaining: Int = 3) {
+        guard remaining > 0, let map, let mapView else { return }
+        guard let center = CameraPaddingEmulation.correctedCenter(
+            target: requested.position,
+            paddings: requested.paddings,
+            viewportSize: mapView.bounds.size,
+            project: { point in
+                map.pointForCoordinate(coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude))
+            },
+            unproject: { point in map.coordinateForPoint(point: point)?.toGeoPoint() }
+        ) else { return }
+        // 1 回ごとに反映を待ってから測り直す（同じ古い投影でずれを重ねて足さないため）。
+        map.applyCamera(
+            CameraUpdate(position: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude)),
+            animationDuration: 0
+        ) { [weak self] _ in
+            self?.correctPaddedTarget(requested, remaining: remaining - 1)
         }
     }
 
