@@ -478,10 +478,11 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
                 farRight: region.farRight.toGeoPoint()
             )
         }
-        return properties.toMapCameraPosition(
+        let raw = properties.toMapCameraPosition(
             visibleRegion: visibleRegion,
             logicalTiltHint: controller?.lastLogicalTilt
         )
+        return controller?.reportedCamera(raw) ?? raw
     }
 
     // MARK: - Custom marker drag
