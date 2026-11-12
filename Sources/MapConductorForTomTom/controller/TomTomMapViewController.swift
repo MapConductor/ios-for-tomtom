@@ -68,6 +68,7 @@ final class TomTomMapViewController: MapViewControllerProtocol {
         let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
         map?.moveCamera(position.toCameraUpdate())
+        correctPaddedTarget(requested)
     }
 
     func animateCamera(position requested: MapCameraPosition, duration: Long) {
@@ -77,7 +78,10 @@ final class TomTomMapViewController: MapViewControllerProtocol {
         map?.applyCamera(
             position.toCameraUpdate(),
             animationDuration: TimeInterval(duration) / 1000.0,
-            completion: nil
+            completion: { [weak self] finished in
+                guard finished else { return }
+                self?.correctPaddedTarget(requested)
+            }
         )
     }
 
@@ -91,13 +95,34 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     }
 
     /// TomTom から読み戻したカメラ（画面中心）を、ターゲット・パディング・視野角を持つカメラへ戻す。
+    /// ターゲットはパディングの残りの中央にある地点を地図に直接聞く。
     func reportedCamera(_ camera: MapCameraPosition) -> MapCameraPosition {
         CameraPaddingEmulation.restored(
             camera,
             paddings: lastPaddings,
             fov: tomTomVerticalFieldOfView,
-            viewportSize: mapView?.bounds.size ?? .zero
+            viewportSize: mapView?.bounds.size ?? .zero,
+            unproject: { [weak map] point in map?.coordinateForPoint(point: point)?.toGeoPoint() }
         )
+    }
+
+    /// 計算で置いた中心だと、TomTom の縮尺や tilt の上限でターゲットがずれる。地図の投影で
+    /// 実際の位置を測り、パディングの残りの中央に来るまで中心だけを動かし直す。
+    private func correctPaddedTarget(_ requested: MapCameraPosition) {
+        guard let map, let mapView else { return }
+        let size = mapView.bounds.size
+        for _ in 0..<3 {
+            guard let center = CameraPaddingEmulation.correctedCenter(
+                target: requested.position,
+                paddings: requested.paddings,
+                viewportSize: size,
+                project: { point in
+                    map.pointForCoordinate(coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude))
+                },
+                unproject: { point in map.coordinateForPoint(point: point)?.toGeoPoint() }
+            ) else { return }
+            map.moveCamera(CameraUpdate(position: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude)))
+        }
     }
 
     func fitBounds(bounds: GeoRectBounds, padding: Int) {
