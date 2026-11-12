@@ -1,6 +1,6 @@
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import TomTomSDKMapDisplay
 
 final class TomTomMapViewController: MapViewControllerProtocol {
