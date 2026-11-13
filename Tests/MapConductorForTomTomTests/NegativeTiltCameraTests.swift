@@ -31,7 +31,9 @@ final class NegativeTiltCameraTests: XCTestCase {
         let update = camera.toCameraUpdate()
 
         XCTAssertEqual(update.tilt ?? 0, 45, accuracy: 1e-9)
-        XCTAssertEqual(update.rotation ?? 0, 30, accuracy: 1e-9)
+        // TomTom の rotation は heading 系（値を増やすと地図が反時計回り）なので、
+        // 時計回りの bearing 30 は符号が反転して 330 になる（CameraBearing.toNativeHeading）。
+        XCTAssertEqual(update.rotation ?? 0, 330, accuracy: 1e-9)
         // ターゲットは前進しない
         XCTAssertEqual(update.position?.latitude ?? 0, tokyo.latitude, accuracy: 1e-9)
         XCTAssertEqual(update.position?.longitude ?? 0, tokyo.longitude, accuracy: 1e-9)
