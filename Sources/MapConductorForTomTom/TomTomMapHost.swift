@@ -1,6 +1,6 @@
 import Combine
 import CoreLocation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import SwiftUI
 import TomTomSDKMapDisplay
 import UIKit
@@ -76,7 +76,7 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         self.mapView = mapView
 
         mapView.getMapAsync { [weak self] map in
-            guard let self else { return }
+            guard let self, self.mapView === mapView else { return }
             self.onMapReady(mapView: mapView, map: map, apiKey: resolvedApiKey)
             self.applyCameraRestriction(cameraRestriction)
             self.updateContent(content)
@@ -114,10 +114,26 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
     private var groundImageController: TomTomGroundImageController?
     private var rasterController: TomTomRasterLayerController?
     private var overlayScope: MapOverlayScope?
+    /// タイル方式マーカーのラスター層。content のラスター層に合流させて流す。
+    private var markerTileRasterLayer: RasterLayerState?
+    /// 直近の content のラスター層。マーカーのタイル層だけが変わったときに合流し直すため。
+    private var contentRasterLayers: [RasterLayerState] = []
     private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
 
     private var cameraMoving = false
     private var appliedDesignId: String?
+    private var isMapReady = false
+    private var pendingStyle: MapViewStyle?
+    private var pendingStyleDiagnostics: (([String]) -> Void)?
+
+    /// Keep the latest SwiftUI style until the asynchronous map creation has
+    /// registered the raster controller that the style needs to mount its tiles.
+    func updateStyle(_ style: MapViewStyle?, onDiagnostics: (([String]) -> Void)?) {
+        pendingStyle = style
+        pendingStyleDiagnostics = onDiagnostics
+        guard isMapReady else { return }
+        applyStyle(style, onDiagnostics: onDiagnostics)
+    }
 
     // Custom drag state (TomTom has no native marker drag).
     private var dragRecognizer: MarkerDragGestureRecognizer?
@@ -192,6 +208,37 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             fallbackDesign: (state.mapDesignType as? TomTomMapDesign) ?? .Standard
         )
         self.rasterController = rasterController
+        // Many polygons are drawn into raster tiles and shown as one raster
+        // layer; taps still resolve against the original shapes.
+        let polygonTiler = PolygonTiler()
+        polygonTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolygonTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolygonTiler.layerId)
+            }
+        }
+        polygonController.tiler = polygonTiler
+        // Many polylines likewise, in their own raster layer in the polyline band
+        // (under the natively drawn polylines); taps still resolve against the original lines.
+        let polylineTiler = PolylineTiler()
+        polylineTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolylineTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolylineTiler.layerId)
+            }
+        }
+        polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -204,6 +251,7 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         controller.registerOverlayController(polygonController)
         controller.registerOverlayController(groundImageController)
         controller.registerOverlayController(rasterController)
+        controller.clearOverlaysHandler = { [weak self] in await self?.clearOverlays() }
 
         let overlayScope = MapOverlayScope()
         self.overlayScope = overlayScope
@@ -212,6 +260,14 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         bindOverlayCollector(overlayScope.polygonCollector, to: polygonController)
         bindOverlayCollector(overlayScope.rasterLayerCollector, to: rasterController)
         bindOverlayCollector(overlayScope.groundImageCollector, to: groundImageController)
+
+        // マーカーのタイル層はマーカーが変わるたびに作り直される。content の同期を
+        // 待たずにここで流さないと、次に画面が描き直されるまで古いタイルのまま残る。
+        markerController.markerTileRasterLayerCallback = { [weak self] state in
+            guard let self else { return }
+            self.markerTileRasterLayer = state
+            self.syncRasterLayers()
+        }
 
         // 円は radius 変更のたびに polygon を作り直して最前面へ来るため、
         // 描画後にポリラインを最前面へ戻す（TomTom は z-index 未対応で描画順＝追加順）。
@@ -249,6 +305,8 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         recognizer.shouldBeginAt = { [weak self] point in self?.dragShouldBegin(at: point) ?? false }
         mapView.addGestureRecognizer(recognizer)
         self.dragRecognizer = recognizer
+        isMapReady = true
+        applyStyle(pendingStyle, onDiagnostics: pendingStyleDiagnostics)
     }
 
     public func applyDesign(_ design: TomTomMapDesignType) {
@@ -266,13 +324,26 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
 
     public func updateContent(_ content: MapViewContent) {
         infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
+        markerController?.tilingOptions = content.markerTilingOptions
         markerController?.syncMarkers(content.markers)
         overlayScope?.circleCollector.sync(content.circles.map { $0.state })
         overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
-        overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
+        polygonController?.tiler?.refreshIfServerMoved()
+        if polylineController?.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+        if circleController?.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
+        polylineController?.tiler?.refreshIfServerMoved()
+        circleController?.tiler?.refreshIfServerMoved()
+        contentRasterLayers = content.rasterLayers.map { $0.state }
+        syncRasterLayers()
         overlayScope?.groundImageCollector.sync(content.groundImages.map { $0.state })
         infoBubbleCoordinator?.updateAllLayouts()
+    }
+
+    /// content のラスター層に、タイル方式マーカーの層を合流させて流す。
+    private func syncRasterLayers() {
+        let tileLayer = markerTileRasterLayer.map { [$0] } ?? []
+        overlayScope?.rasterLayerCollector.sync(contentRasterLayers + tileLayer)
     }
 
     // MARK: - MapDelegate
@@ -291,7 +362,32 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
             //
             // 他プロバイダのように重複したカスケードを持っているわけではないので、
             // 畳む対象が無い。android-for-tomtom も同じ判断（1-18 の nativeFirst）。
+            //
+            // ただしタイル方式のマーカーは annotation ではないので、ここで拾う。
+            if let screenPoint = map.pointForCoordinate(coordinate: coordinate),
+               markerController?.handleTiledMarkerTap(
+                   at: screenPoint,
+                   zoom: lastCameraPosition?.zoom ?? 0
+               ) == true {
+                break
+            }
             let point = coordinate.toGeoPoint()
+            // Polylines drawn in tiles are not annotations either (and sit above
+            // the polygons): looked up by shape, delivered at the closest point
+            // on the line, as the other providers do.
+            if let polylineController, let tiler = polylineController.tiler,
+               let hit = polylineController.findWithClosestPoint(position: point), tiler.isTiled(hit.entity.state.id) {
+                polylineController.dispatchClick(event: PolylineEvent(state: hit.entity.state, clicked: hit.closestPoint))
+                break
+            }
+            // Polygons drawn in tiles are not annotations either. They are
+            // looked up by shape, as the other providers do; only tiled ones,
+            // so a native polygon keeps the annotation path above.
+            if let polygonController, let tiler = polygonController.tiler,
+               let hit = polygonController.find(position: point), tiler.isTiled(hit.state.id) {
+                polygonController.dispatchClick(event: PolygonEvent(state: hit.state, clicked: point))
+                break
+            }
             controller?.notifyMapClick(point)
             onMapClick?(point)
         case let .tappedOnAnnotation(annotation, coordinate):
@@ -382,10 +478,11 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
                 farRight: region.farRight.toGeoPoint()
             )
         }
-        return properties.toMapCameraPosition(
+        let raw = properties.toMapCameraPosition(
             visibleRegion: visibleRegion,
             logicalTiltHint: controller?.lastLogicalTilt
         )
+        return controller?.reportedCamera(raw) ?? raw
     }
 
     // MARK: - Custom marker drag
@@ -438,7 +535,23 @@ public final class TomTomMapHost: MapViewCoordinatorBase<TomTomMapViewState>, Ma
         }
     }
 
+    /// android-sdk の `clearOverlays()` と同じく、各オーバーレイのコントローラを空にする。
+    /// `controller.clearOverlaysHandler` から呼ばれる。
+    func clearOverlays() async {
+        await markerController?.clear()
+        await polylineController?.clear()
+        await polygonController?.clear()
+        await groundImageController?.clear()
+        await circleController?.clear()
+        await rasterController?.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。
+        await state.serviceRegistry.clearMarkerRendering()
+    }
+
     public func unbind() {
+        isMapReady = false
+        pendingStyle = nil
+        pendingStyleDiagnostics = nil
         // 登録した capability を取り下げる。レジストリの持ち主は state で、ビューより長生きするため、
         // ここで外さないと破棄済みのコントローラを掴んだまま残る。
         state.serviceRegistry.removeProviderRegistrations()

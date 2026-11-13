@@ -1,6 +1,5 @@
 import Foundation
-import UIKit
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import TomTomSDKMapDisplay
 
 actor TomTomStyleComposer {
@@ -8,36 +7,73 @@ actor TomTomStyleComposer {
 
     private var cachedBaseStyles: [String: [String: Any]] = [:]
 
+    /// - Parameter withoutBasemap: for ``TomTomMapDesign/None``. The browsing
+    /// style stays the skeleton -- this SDK falls back to its default style
+    /// when handed one without its own layers (measured: a bare background
+    /// style put the default map back at world scale) -- but every layer of
+    /// it except the background is hidden, so no TomTom tile is fetched and
+    /// the raster layers sit on a background colour.
     func compose(
         apiKey: String,
         layers: [TomTomRasterSpec],
-        outputURL: URL
+        outputURL: URL,
+        withoutBasemap: Bool = false
     ) async throws -> StyleContainer {
-        var root = try await baseStyle(apiKey: apiKey)
+        var root = try await baseStyle(apiKey: apiKey, nextTo: outputURL)
         var sources = root["sources"] as? [String: Any] ?? [:]
         var styleLayers = root["layers"] as? [[String: Any]] ?? []
 
-        sources["mc-base-raster"] = rasterTileSource(
-            template: baseRasterTemplate(apiKey: apiKey),
-            tileSize: 256,
-            minZoom: nil,
-            maxZoom: nil,
-            scheme: .XYZ
-        )
-        let baseLayer = rasterLayer(id: "mc-base-raster-layer", source: "mc-base-raster", opacity: 1)
-        let baseIndex = styleLayers.first?["type"] as? String == "background" ? 1 : 0
-        styleLayers.insert(baseLayer, at: min(baseIndex, styleLayers.count))
+        if withoutBasemap {
+            styleLayers = styleLayers.map { layer in
+                var layer = layer
+                if layer["type"] as? String == "background" {
+                    layer["paint"] = ["background-color": BlankMapStyle.backgroundColor]
+                } else {
+                    var layout = layer["layout"] as? [String: Any] ?? [:]
+                    layout["visibility"] = "none"
+                    layer["layout"] = layout
+                }
+                return layer
+            }
+        } else {
+            sources["mc-base-raster"] = rasterTileSource(
+                template: baseRasterTemplate(apiKey: apiKey),
+                tileSize: 256,
+                minZoom: nil,
+                maxZoom: nil,
+                scheme: .XYZ
+            )
+            let baseLayer = rasterLayer(id: "mc-base-raster-layer", source: "mc-base-raster", opacity: 1)
+            let baseIndex = styleLayers.first?["type"] as? String == "background" ? 1 : 0
+            styleLayers.insert(baseLayer, at: min(baseIndex, styleLayers.count))
+        }
 
+        // ラスターはスタイルの一番上ではなく、ベースマップの最初のラベル（symbol）の直前に入れる。
+        // 一番上に積むと、SDK が描くポリゴン・ポリライン・サークル・グラウンドイメージ
+        // （アノテーション）まで覆っていた（帯の順: ラスター < グラウンドイメージ < ポリゴン …）。
+        // GL 系の他プロバイダと同じく、ラスターはラベルの下・ベースマップの地物の上になる。
+        //
+        // SDK 自身のポリライン・マーカーのタイルはスタイルの一番上に積む（`layers` は帯の順に
+        // 並んでいる）。TomTom のスタイルは最初の symbol の後ろにも道路のレイヤが続くため、
+        // ラベルの前に入れるとポリラインのタイルが地図の道路に覆われて見えなかった。
+        // ポリゴンのタイルはラベルの前のまま: 一番上に積むとネイティブのサークル（アノテーション）
+        // まで覆った（iPad の色判定で確認）。アノテーションはスタイルの一番上より下に描かれるので、
+        // ネイティブのポリライン・サークルはポリラインのタイルの下になる（SDK の制約）。
+        var insertAt = Self.firstLabelIndex(styleLayers) ?? styleLayers.count
         for (index, spec) in layers.enumerated() {
             let sourceId = "mc-raster-src-\(index)"
             sources[sourceId] = rasterSource(spec.source)
-            styleLayers.append(
-                rasterLayer(
-                    id: "mc-raster-layer-\(index)-\(styleIdentifier(spec.id))",
-                    source: sourceId,
-                    opacity: spec.opacity
-                )
+            let layer = rasterLayer(
+                id: "mc-raster-layer-\(index)-\(styleIdentifier(spec.id))",
+                source: sourceId,
+                opacity: spec.opacity
             )
+            if OverlayStacking.rasterKey(stateId: spec.id, zIndex: spec.zIndex).band >= .polyline {
+                styleLayers.append(layer)
+                continue
+            }
+            styleLayers.insert(layer, at: insertAt)
+            insertAt += 1
         }
 
         root["sources"] = sources
@@ -47,13 +83,32 @@ actor TomTomStyleComposer {
         return StyleContainer(mainStyle: .custom(style: outputURL))
     }
 
-    private func baseStyle(apiKey: String) async throws -> [String: Any] {
+    /// ベースマップの最初のラベル（symbol レイヤ）の位置。
+    static func firstLabelIndex(_ styleLayers: [[String: Any]]) -> Int? {
+        styleLayers.firstIndex { $0["type"] as? String == "symbol" }
+    }
+
+    /// The browsing style's skeleton.
+    ///
+    /// The SDK will not take a style that has none of its own layers (it
+    /// reverts to its default), so every composed style is built on this --
+    /// which lives on api.tomtom.com. The last copy is kept on disk so a map
+    /// with no network still comes up: the skeleton is reused and only the
+    /// raster layers on top, which are served from the device, are drawn.
+    /// Caches only, and never logged: the JSON carries the API key.
+    private func baseStyle(apiKey: String, nextTo outputURL: URL) async throws -> [String: Any] {
         if let cached = cachedBaseStyles[apiKey] { return cached }
+        let onDisk = outputURL.deletingLastPathComponent().appendingPathComponent(Self.baseStyleCacheFile)
         guard let url = browsingStyleURL(apiKey: apiKey) else {
             throw ComposerError.invalidStyleURL
         }
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+        var downloaded: Data?
+        if let (data, response) = try? await URLSession.shared.data(from: url),
+           let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode {
+            downloaded = data
+            try? data.write(to: onDisk, options: .atomic)
+        }
+        guard let data = downloaded ?? (try? Data(contentsOf: onDisk)) else {
             throw ComposerError.styleDownloadFailed
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -62,6 +117,8 @@ actor TomTomStyleComposer {
         cachedBaseStyles[apiKey] = json
         return json
     }
+
+    private static let baseStyleCacheFile = "tomtom_base_style.json"
 
     private func browsingStyleURL(apiKey: String) -> URL? {
         var components = URLComponents(string: "https://api.tomtom.com/style/1/style/25.2.*")
@@ -104,36 +161,13 @@ actor TomTomStyleComposer {
         }
     }
 
-    /// この SDK は宣言した `tileSize` より**大きくタイルを敷き、その倍率が画面倍率で変わる**。
-    ///
-    /// MapConductor の `tileSize` は「1 枚のタイルが覆うレイアウト単位（ポイント）」で、
-    /// MapLibre はそのとおりに敷く。同じスタイル JSON を渡しているのに、この SDK は
-    /// 粗いズームのタイルを取ってきて引き伸ばす。宣言をあらかじめ割っておくと揃う。
-    ///
-    /// 実測（地図ズーム 13、`tileSize` 512 の GeoJSON レイヤ。正しい要求は z=12）:
-    ///
-    /// | 画面 | 宣言 | 要求されるタイル z | 線の太さ（MapLibre 比） |
-    /// |---|---|---|---|
-    /// | 3x iPhone | 512 | 11 | 2.0 倍 |
-    /// | 3x iPhone | **256（÷2）** | **12** | **1.0 倍** |
-    /// | 2x iPad | 256（÷2） | 11 | 1.8 倍 |
-    /// | 2x iPad | **128（÷4）** | **12** | **1.0 倍** |
-    ///
-    /// つまり必要な除数は 3x で 2、2x で 4。エンジンの式は非公開なので、これは
-    /// **理屈ではなく較正**である。未知の倍率（1x など）は安全側の 2 に倒す
-    /// （粗い側にずれても表示は太くなるだけで、欠けはしない）。
-    ///
-    /// ベースの地図タイル（mc-base-raster、256）も同じ経路で割っている。ここを
-    /// 除外するとベースだけ倍の大きさで描かれてぼやける。
-    ///
-    /// **ここを外すと GeoJSON レイヤ・ヒートマップ・タイル方式マーカーが揃って
-    /// 太く・ぼやけて描かれる。** android-for-tomtom は別実装（TILE_SIZE_SCALE = 2 固定。
-    /// あちらは densityDpi の系で、実測 6px = MapLibre と一致済み）。
-    private static let tileSizeScale: Int = {
-        // 起動後 UIKit が使える前になることはない（compose は地図生成後にしか呼ばれない）。
-        let displayScale = Int(UIScreen.main.scale.rounded())
-        return displayScale <= 2 ? 4 : 2
-    }()
+    /// TomTom's raster source grid needs half the logical display tile size.
+    /// At unified zoom 12, a 512-point source must request XYZ z=11, as on
+    /// MapLibre. Dividing by four on a 2x iPad instead requested z=12: the
+    /// renderer read the style one level too high and its roads were shrunk
+    /// into a 256-point cell. Screen scale controls image pixels, not the
+    /// geographic grid or the zoom at which the style is evaluated.
+    private static let tileSizeScale = 2
 
     private func rasterTileSource(
         template: String,

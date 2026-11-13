@@ -1,6 +1,14 @@
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
+
+/// TomTom（iOS）のカメラの縦の視野角（度）。**分からないので nil。**
+///
+/// `CameraProperties.fieldOfView`（既定 45）はあるが、どの向きの角度かが書かれておらず、
+/// iPad Pro 11 で傾けた地図の画面位置から焦点距離を求めると tilt ごとに 37°〜56° とばらつき、
+/// 単純なピンホールカメラに合わない。パディングは地図の投影で実測して合わせる
+/// （``CameraPaddingEmulation/correctedCenter(target:paddings:viewportSize:project:unproject:)``）。
+let tomTomVerticalFieldOfView: Double? = nil
 import TomTomSDKMapDisplay
 
 private let converter = TomTomZoomAltitudeConverter()
@@ -27,7 +35,7 @@ public extension MapCameraPosition {
                     latitude: position.latitude
                 ),
                 tilt: min(max(tilt, 0.0), 60.0),
-                rotation: bearing
+                rotation: CameraBearing.toNativeHeading(bearing)
             )
         }
 
@@ -43,7 +51,7 @@ public extension MapCameraPosition {
             tilt: 0.0
         )
         let distanceForward = altitude * cos(tiltAbsRad) * tan(tiltAbsRad) * negativeTiltTargetDistanceScale
-        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
+        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: CameraBearing.toNativeHeading(bearing))
         let adjustedZoom = zoom + negativeTiltZoomOffsetAtMaxTilt * (tiltAbsDeg / 60.0)
 
         return CameraUpdate(
@@ -53,7 +61,7 @@ public extension MapCameraPosition {
                 latitude: target.latitude
             ),
             tilt: tiltAbsDeg,
-            rotation: bearing
+            rotation: CameraBearing.toNativeHeading(bearing)
         )
     }
 }
@@ -88,7 +96,7 @@ public extension CameraProperties {
                     zoom,
                     latitude: position.latitude
                 ),
-                bearing: rotation,
+                bearing: CameraBearing.bearingFromNativeHeading(rotation),
                 tilt: tilt,
                 visibleRegion: visibleRegion
             )
@@ -129,7 +137,7 @@ public extension CameraProperties {
                 altitude: altitude
             ),
             zoom: originalGoogleZoom,
-            bearing: rotation,
+            bearing: CameraBearing.bearingFromNativeHeading(rotation),
             tilt: -tiltAbsDeg,
             visibleRegion: visibleRegion
         )

@@ -5,7 +5,7 @@ final class ZoomAltitudeConverterTests: XCTestCase {
     func testTokyoOffsetMatchesCameraSyncCalibration() {
         XCTAssertEqual(
             TomTomZoomAltitudeConverter.zoomOffset(at: 35.6812),
-            1.46,
+            1.435,
             accuracy: 0.01
         )
     }
@@ -13,7 +13,7 @@ final class ZoomAltitudeConverterTests: XCTestCase {
     func testOahuOffsetMatchesCameraSyncCalibration() {
         XCTAssertEqual(
             TomTomZoomAltitudeConverter.zoomOffset(at: 21.4389),
-            1.66,
+            1.632,
             accuracy: 0.01
         )
     }

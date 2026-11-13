@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = "MapConductorForTomTom"
-  s.version = "1.3.1"
+  s.version = "1.4.0"
   s.summary = "MapConductor's TomTom Orbis Maps provider."
   s.license = { :type => "Apache-2.0", :file => "LICENSE" }
   s.author = "MapConductor"
@@ -15,5 +15,5 @@ Pod::Spec.new do |s|
   # Compiled from source so the vendor's binary frameworks are linked fresh into the
   # consuming app (never embedded into a prebuilt MapConductor xcframework).
   s.dependency "TomTomSDKMapDisplay"
-  s.dependency "MapConductorCore"
+  s.dependency "MapConductorCore", "~> 1.4"
 end

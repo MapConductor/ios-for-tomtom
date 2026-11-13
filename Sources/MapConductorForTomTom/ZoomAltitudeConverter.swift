@@ -5,14 +5,19 @@ import MapConductorCore
 ///
 /// TomTom のズームはグラウンドスケール基準（画面上の meter/pixel が緯度によらず一定）
 /// なので、Web Mercator 基準との差が緯度に依存する。オフセットは
-/// `1.76 + log2(cos φ)`。1.76 は実測較正値（Camera Sync でオアフ島 ≈ 1.66、東京 ≈ 1.46）。
+/// `1.735 + log2(cos φ)`。1.735 は実測較正値（オアフ島 ≈ 1.63、東京 ≈ 1.435）。
+///
+/// 較正は iPad Pro 11"（TomTom Orbis Maps SDK 0.74.0）で、同じ統一ズーム・同じ地図サイズの
+/// Google Maps と画面中心付近の縮尺（`coordinateForPoint` で取った ±150pt の距離）を突き合わせて行った。
+/// 以前の 1.76 では TomTom が緯度 0〜65°、zoom 9〜19 のどこでも 0.025 段だけ広く写っていた。
+/// Android（TB520FU、TomTom Maps SDK 2.7.2）でも同じ 0.025 段のずれで、同じ値に揃えてある。
 /// 表示スケールとビューポート寸法は意図的に式へ入れていない。Android のクロスデバイス
 /// 較正で、両 SDK とも論理ビューポート寸法に追従済みだと分かっているため。
 ///
 /// 換算式はコアの ``GroundScaleZoomAltitudeConverter`` にある。
 public final class TomTomZoomAltitudeConverter: GroundScaleZoomAltitudeConverter {
     /// Equatorial offset (`googleZoom - tomtomZoom`).
-    public static let tomtomToGoogleZoomBaseOffset: Double = 1.76
+    public static let tomtomToGoogleZoomBaseOffset: Double = 1.735
 
     public init(zoom0Altitude: Double = AbstractZoomAltitudeConverter.defaultZoom0Altitude) {
         super.init(zoom0Altitude: zoom0Altitude, baseZoomOffset: Self.tomtomToGoogleZoomBaseOffset)

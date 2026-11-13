@@ -12,7 +12,7 @@ InfoBubble.
 This mirrors the Android `android-for-tomtom` module feature-for-feature:
 
 - **Zoom calibration**: the unified zoom is Google-equivalent. `TomTomZoomAltitudeConverter` uses
-  the camera latitude (`1.76 + log2(cos(latitude))`) when converting between unified and TomTom-native
+  the camera latitude (`1.735 + log2(cos(latitude))`) when converting between unified and TomTom-native
   zoom; viewport dimensions and display scale need no additional correction.
 - **Marker drag (custom)**: TomTom has no native marker drag. A `MarkerDragGestureRecognizer` on the
   `MapView` implements grab-on-move / click-on-release: touching a `draggable` marker owns the gesture

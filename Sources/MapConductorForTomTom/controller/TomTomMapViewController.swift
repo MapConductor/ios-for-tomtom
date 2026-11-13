@@ -1,6 +1,6 @@
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import TomTomSDKMapDisplay
 
 final class TomTomMapViewController: MapViewControllerProtocol {
@@ -31,6 +31,9 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     /// カメラ状態の読み戻し時に元の負tilt を復元するヒントとして保持する
     /// （android-for-tomtom の `lastLogicalCameraPosition` / MapLibre と同方針）。
     private(set) var lastLogicalTilt: Double?
+    /// 直近の移動で要求されたパディング。TomTom のカメラには使えるパディングが無いので、中心を
+    /// ずらして再現し（``CameraPaddingEmulation``）、読み戻しで逆にずらすときに使う。
+    private(set) var lastPaddings: MapPaddingsProtocol?
 
     /// 初期カメラ（MapOptions 経由で適用され `moveCamera` を通らない）の論理 tilt を記録する。
     func seedLogicalTilt(_ tilt: Double) {
@@ -45,8 +48,12 @@ final class TomTomMapViewController: MapViewControllerProtocol {
         self.holder = AnyMapViewHolder(typedHolder)
     }
 
+    /// ``clearOverlays()`` の中身。オーバーレイのコントローラはホストが持っているので、
+    /// ホストが生成時に設定する（android-sdk と同じく、各コントローラの `clear()` を呼ぶ）。
+    var clearOverlaysHandler: (@MainActor () async -> Void)?
+
     func clearOverlays() async {
-        map?.removeAnnotations()
+        await clearOverlaysHandler?()
     }
 
     func setCameraMoveStartListener(listener: OnCameraMoveHandler?) { cameraMoveStartListener = listener }
@@ -56,18 +63,91 @@ final class TomTomMapViewController: MapViewControllerProtocol {
     func setMapLongClickListener(listener: OnMapEventHandler?) { mapLongClickListener = listener }
     func setMapInitializedListener(listener: OnMapInitializedHandler?) { mapInitializedListener = listener }
 
-    func moveCamera(position: MapCameraPosition) {
+    func moveCamera(position requested: MapCameraPosition) {
+        lastPaddings = requested.paddings
+        let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
-        map?.moveCamera(position.toCameraUpdate())
+        // カメラの反映は非同期なので、反映し終わってから投影で測って詰める。
+        correctedAnchor = nil
+        map?.applyCamera(position.toCameraUpdate(), animationDuration: 0) { [weak self] _ in
+            DispatchQueue.main.async { self?.correctPaddedTarget(requested) }
+        }
     }
 
-    func animateCamera(position: MapCameraPosition, duration: Long) {
+    func animateCamera(position requested: MapCameraPosition, duration: Long) {
+        lastPaddings = requested.paddings
+        let position = paddingApplied(requested)
         lastLogicalTilt = position.tilt
         map?.applyCamera(
             position.toCameraUpdate(),
             animationDuration: TimeInterval(duration) / 1000.0,
-            completion: nil
+            completion: { [weak self] finished in
+                guard finished else { return }
+                DispatchQueue.main.async { self?.correctPaddedTarget(requested) }
+            }
         )
+    }
+
+    /// TomTom へ渡すカメラ。パディングの分だけ中心をずらす。
+    private func paddingApplied(_ position: MapCameraPosition) -> MapCameraPosition {
+        CameraPaddingEmulation.applied(
+            to: position,
+            fov: tomTomVerticalFieldOfView,
+            viewportSize: mapView?.bounds.size ?? .zero
+        )
+    }
+
+    /// TomTom から読み戻したカメラ（画面中心）を、ターゲット・パディング・視野角を持つカメラへ戻す。
+    /// ターゲットはパディングの残りの中央にある地点を地図に直接聞く。
+    ///
+    /// カメラ変更の通知の中から地図の投影を呼ぶと TomTom が止まる（実機で確認）ので、ここでは
+    /// 投影を使わない。投影で詰め終えた直後のカメラなら、そのときのターゲットをそのまま返し、
+    /// それ以外（ジェスチャー後など）は tilt 0 の換算で戻す（tilt があると近似）。
+    func reportedCamera(_ camera: MapCameraPosition) -> MapCameraPosition {
+        let restored = CameraPaddingEmulation.restored(
+            camera,
+            paddings: lastPaddings,
+            fov: tomTomVerticalFieldOfView,
+            viewportSize: mapView?.bounds.size ?? .zero
+        )
+        if let anchor = correctedAnchor,
+           abs(anchor.center.latitude - camera.position.latitude) < 1e-9,
+           abs(anchor.center.longitude - camera.position.longitude) < 1e-9 {
+            return restored.copy(position: anchor.target)
+        }
+        return restored
+    }
+
+    /// 投影で詰め終えたときのカメラの中心と、そのときのターゲット。
+    private var correctedAnchor: (center: GeoPoint, target: GeoPoint)?
+
+    /// 計算で置いた中心だと、TomTom の縮尺や tilt の上限でターゲットがずれる。地図の投影で
+    /// 実際の位置を測り、パディングの残りの中央に来るまで中心だけを動かし直す。
+    private func correctPaddedTarget(_ requested: MapCameraPosition, remaining: Int = 3) {
+        guard let map, let mapView else { return }
+        let target = GeoPoint.from(position: requested.position)
+        let center = remaining > 0 ? CameraPaddingEmulation.correctedCenter(
+            target: target,
+            paddings: requested.paddings,
+            viewportSize: mapView.bounds.size,
+            project: { point in
+                map.pointForCoordinate(coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude))
+            },
+            unproject: { point in map.coordinateForPoint(point: point)?.toGeoPoint() }
+        ) : nil
+        guard let center else {
+            // 詰め終えた。いまの中心とターゲットを覚えておき、読み戻しで使う。
+            let current = map.cameraProperties.position
+            correctedAnchor = (GeoPoint(latitude: current.latitude, longitude: current.longitude), target)
+            return
+        }
+        // 1 回ごとに反映を待ってから測り直す（同じ古い投影でずれを重ねて足さないため）。
+        map.applyCamera(
+            CameraUpdate(position: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude)),
+            animationDuration: 0
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.correctPaddedTarget(requested, remaining: remaining - 1) }
+        }
     }
 
     func fitBounds(bounds: GeoRectBounds, padding: Int) {

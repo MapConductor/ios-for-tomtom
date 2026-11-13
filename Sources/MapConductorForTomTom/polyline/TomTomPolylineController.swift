@@ -41,8 +41,10 @@ final class TomTomPolylineController: PolylineController<TomTomActualPolyline, T
     }
 
     /// ポリラインを最前面へ再追加する（円/ポリゴンの再生成で下に潜るのを防ぐ）。
+    /// タイルで描いている線（`polyline` が nil）は地図に物が無いので触らない。
+    /// 全部を渡すとタイルの線までネイティブで描き足してしまう。
     func bringToFront() async {
-        await renderer.reAddOnTop(polylineManager.allEntities())
+        await renderer.reAddOnTop(polylineManager.allEntities().filter { $0.polyline != nil })
     }
 
     /// Dispatch a click for the tapped native line (matched by tag == state.id).
